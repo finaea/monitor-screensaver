@@ -271,7 +271,7 @@ unlock, then read the log. Runs until killed; no tray, no engine, no overlays.
 
 ## Footprint
 
-| Build | Working set | Private |
+| Build | Working set | Commit charge |
 |---|---|---|
 | Release, single-file **compressed** | ~331 MB | ~233 MB |
 | Release, single-file (shipped config) | **~241 MB** | ~204 MB |
@@ -280,6 +280,37 @@ Measured with the settings window open, which is the worst case. An earlier revi
 ~198 MB, but that number is not comparable — it was taken while the settings window was
 silently failing to render (see `InvariantGlobalization` above), so nothing was actually
 being laid out. Workstation non-concurrent GC accounts for most of the saving over default.
+
+### Working set is the wrong number to quote
+
+Splitting a live process (settings window closed, via `\Process(MonitorDim)\Working Set -
+Private`) shows how little of it is really this app's:
+
+| | |
+|---|---|
+| Working set | 140.1 MB |
+| — private resident | **15.8 MB** |
+| — shared, file-backed | 124.2 MB |
+| Commit charge (private bytes) | 215.0 MB — of which ~199 MB is committed but never resident |
+
+The shared 124 MB is CoreCLR, WPF, shell libraries and the GPU driver stack, mapped from disk
+and charged to every process that maps them. Across 112 loaded modules totalling 434.2 MB of
+address space, **20 are graphics modules accounting for 329.4 MB** — WPF composites through
+Direct3D, so any window pulls in the vendor D3D runtime and shader compilers:
+
+| Module | Mapped | What it is |
+|---|---|---|
+| `nvgpucomp64.dll` | 94.1 MB | NVIDIA shader compiler |
+| `igd12dxva64.dll` | 83.1 MB | Intel D3D12 / video acceleration |
+| `igc64.dll` | 68.9 MB | Intel graphics shader compiler |
+| `nvd3dumx.dll` | 41.4 MB | NVIDIA D3D user-mode driver |
+
+Both vendors are mapped on the test machine; it has displays across the integrated and
+discrete GPUs. None of this is memory MonitorDim allocates, and none of it is avoidable while
+the UI is WPF.
+
+Single-file publish also extracts 8.0 MB of native libraries (5 files) to
+`%TEMP%\.net\MonitorDim\<hash>\` on first run. Disk, not memory.
 
 The floor here is WPF + WinForms both being loaded; WinForms is present solely for the tray
 `NotifyIcon`. Replacing it with a raw `Shell_NotifyIcon` P/Invoke and a WPF `ContextMenu`

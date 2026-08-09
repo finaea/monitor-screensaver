@@ -149,7 +149,25 @@ seconds** and hidden from the Power Options UI. More in [TECHNICAL.md](TECHNICAL
 
 ### Memory
 
-~240 MB working set. Major contribution from WPF and WinForms both being loaded.
+Task Manager will show ~140 MB, or ~240 MB with the settings window open. That number is
+misleading — **only about 16 MB of it is actually private to MonitorDim.** Measured on a
+running instance with the window closed:
+
+| | |
+|---|---|
+| Working set (what Task Manager shows) | 140 MB |
+| — private to this process | **16 MB** |
+| — shared, file-backed DLLs | 124 MB |
+
+That 124 MB is the .NET runtime, WPF, and your GPU vendor's Direct3D drivers — mapped from
+disk and shared with every other process already using them, so it doesn't disappear if you
+close MonitorDim. WPF draws through Direct3D, so opening any window pulls the graphics stack
+in; on the machine this was measured on that's 20 driver modules and 329 MB of *address
+space*, which is reservation, not memory consumed.
+
+It's still a WPF app rather than a tiny native tray utility, and it does load WinForms purely
+for the tray icon. If you want something that idles at 5 MB, this isn't it. Full breakdown in
+[TECHNICAL.md](TECHNICAL.md#footprint).
 
 ---
 
