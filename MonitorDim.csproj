@@ -1,0 +1,45 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>MonitorDim</AssemblyName>
+    <RootNamespace>MonitorDim</RootNamespace>
+    <ApplicationIcon>Assets\MonitorDim.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.0.0</Version>
+    <Product>MonitorDim</Product>
+    <Description>Per-monitor OLED blanking that mirrors the Windows display-idle policy.</Description>
+    <SelfContained>false</SelfContained>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+
+    <!-- This sits in the tray all day, so trade a little throughput for footprint.
+         Workstation + non-concurrent GC drops a background thread and a lot of
+         committed heap.
+
+         Do NOT set InvariantGlobalization=true here. It saves ~10 MB but WPF's text
+         stack needs the culture data: MS.Internal.FontCache.MajorLanguages fails its
+         type initializer on the first TextBlock measure, which takes down any window
+         containing text. Empty windows (the overlays) survive, so it presents as
+         "the settings window won't open". -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- WFO0003 tells WinForms apps to move DPI config out of the manifest. This is a
+         WPF app that happens to reference WinForms for the tray icon, and WPF reads
+         PerMonitorV2 awareness from the manifest, so the manifest entry is correct. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\MonitorDim.ico" />
+  </ItemGroup>
+
+</Project>
