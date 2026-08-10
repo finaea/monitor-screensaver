@@ -1,7 +1,7 @@
 ﻿using System.Runtime.InteropServices;
 using System.Windows.Interop;
 
-namespace MonitorDim.Core;
+namespace MonitorScreenSaver.Core;
 
 public enum SystemEventKind
 {
@@ -56,7 +56,7 @@ public sealed class SystemEventSink : IDisposable
     public SystemEventSink(bool includeConsoleDisplayState = false)
     {
         _includeConsoleDisplayState = includeConsoleDisplayState;
-        var parameters = new HwndSourceParameters("MonitorDim.SystemEvents")
+        var parameters = new HwndSourceParameters("MonitorScreenSaver.SystemEvents")
         {
             Width = 0,
             Height = 0,
@@ -142,7 +142,7 @@ public sealed class SystemEventSink : IDisposable
                 if (setting.PowerSetting == Native.GUID_SESSION_DISPLAY_STATUS)
                 {
                     WindowsDisplayState = setting.Data;
-                    // 0 = PowerMonitorOff, 1 = PowerMonitorOn, 2 = PowerMonitorDim
+                    // 0 = PowerMonitorOff, 1 = PowerMonitorOn, 2 = PowerMonitorScreenSaver
                     Event?.Invoke(setting.Data switch
                     {
                         0 => SystemEventKind.WindowsDisplayOff,

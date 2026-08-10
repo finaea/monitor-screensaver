@@ -1,7 +1,7 @@
 ﻿using System.Runtime.InteropServices;
 using System.Windows.Threading;
 
-namespace MonitorDim.Core;
+namespace MonitorScreenSaver.Core;
 
 public enum AwakeReason
 {
@@ -11,6 +11,7 @@ public enum AwakeReason
     ForegroundChange,
     DisplayRequest,
     Fullscreen,
+    Audio,
     Resumed,
     Paused,
 }
@@ -22,7 +23,8 @@ public sealed record EngineStatus(
     AwakeReason Reason,
     ExecutionState Exec,
     bool Paused,
-    bool FullscreenActive);
+    bool FullscreenActive,
+    bool AudioActive);
 
 /// <summary>
 /// Reimplements the Windows display-idle decision so it can be applied to a subset of
@@ -50,6 +52,7 @@ public sealed class BlankingEngine : IDisposable
     private ulong _foregroundTick;
     private ulong _displayRequestTick;
     private ulong _fullscreenTick;
+    private ulong _audioTick;
     private ulong _resumeTick;
 
     /// <summary>Input tick at the moment "Blank now" was pressed; cleared by real input.</summary>
@@ -63,7 +66,7 @@ public sealed class BlankingEngine : IDisposable
         _settings = settings;
 
         var now = Native.GetTickCount64();
-        _foregroundTick = _displayRequestTick = _fullscreenTick = _resumeTick = now;
+        _foregroundTick = _displayRequestTick = _fullscreenTick = _audioTick = _resumeTick = now;
 
         _timer = new DispatcherTimer(DispatcherPriority.Background)
         {
@@ -75,7 +78,15 @@ public sealed class BlankingEngine : IDisposable
     }
 
     public EngineStatus Status { get; private set; } =
-        new(false, TimeSpan.Zero, TimeSpan.Zero, AwakeReason.UserInput, default, false, false);
+        new(false, TimeSpan.Zero, TimeSpan.Zero, AwakeReason.UserInput, default, false, false, false);
+
+    /// <summary>
+    /// Set by the app to report whether any visible overlay is playing video. Media
+    /// playback can file its own DISPLAY power request, and honouring our own request
+    /// would unblank the screens we just covered — so while this returns true, display
+    /// requests are not treated as fresh activity.
+    /// </summary>
+    public Func<bool>? VideoOverlayVisible { get; set; }
 
     public event Action<EngineStatus>? StatusChanged;
 
@@ -102,7 +113,7 @@ public sealed class BlankingEngine : IDisposable
     public void NoteActivity()
     {
         var now = Native.GetTickCount64();
-        _foregroundTick = _displayRequestTick = _fullscreenTick = _resumeTick = now;
+        _foregroundTick = _displayRequestTick = _fullscreenTick = _audioTick = _resumeTick = now;
         _manualBlankAtInput = null;
     }
 
@@ -190,13 +201,29 @@ public sealed class BlankingEngine : IDisposable
         if (_settings.TrackForegroundChanges)
             Consider(_foregroundTick, AwakeReason.ForegroundChange);
 
-        if (_settings.HonourDisplayRequests && exec.DisplayRequired)
+        // While our own video overlays are on screen, a DISPLAY request may be ours
+        // (media pipelines file "Playing video" requests). Honouring it would unblank
+        // the screens we just covered, so requests are ignored until real input or
+        // focus wakes us. Without admin rights requests cannot be attributed, so this
+        // deliberately also ignores foreign requests that start mid-blank — those
+        // almost always come with input (Parsec connect, call starting) anyway.
+        var suppressRequests = Status.Blanked && VideoOverlayVisible?.Invoke() == true;
+
+        if (_settings.HonourDisplayRequests && exec.DisplayRequired && !suppressRequests)
             _displayRequestTick = now;
         Consider(_displayRequestTick, AwakeReason.DisplayRequest);
 
         if (fullscreen)
             _fullscreenTick = now;
         Consider(_fullscreenTick, AwakeReason.Fullscreen);
+
+        // Audio only *prevents* blanking; it never unblanks. Someone starting music
+        // after the screens went dark wants them to stay dark, so the tick is not
+        // pushed while blanked — the frozen tick sits in the past and never wins.
+        var audio = _settings.NeverBlankDuringAudio && !Status.Blanked && AudioActivity.IsPlaying();
+        if (audio)
+            _audioTick = now;
+        Consider(_audioTick, AwakeReason.Audio);
 
         Consider(_resumeTick, AwakeReason.Resumed);
 
@@ -216,7 +243,7 @@ public sealed class BlankingEngine : IDisposable
             : timeout > idle ? timeout - idle : TimeSpan.Zero;
 
         var wasBlanked = Status.Blanked;
-        Status = new EngineStatus(blanked, idle, untilBlank, reason, exec, _paused, fullscreen);
+        Status = new EngineStatus(blanked, idle, untilBlank, reason, exec, _paused, fullscreen, audio);
 
         StatusChanged?.Invoke(Status);
         if (blanked != wasBlanked) BlankStateChanged?.Invoke(blanked);

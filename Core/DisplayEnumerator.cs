@@ -1,6 +1,6 @@
 ﻿using System.Runtime.InteropServices;
 
-namespace MonitorDim.Core;
+namespace MonitorScreenSaver.Core;
 
 /// <summary>A rectangle in physical pixels. Public mirror of the internal RECT.</summary>
 public readonly record struct PixelRect(int Left, int Top, int Right, int Bottom)

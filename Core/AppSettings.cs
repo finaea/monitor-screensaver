@@ -1,8 +1,8 @@
-﻿using System.IO;
+using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace MonitorDim.Core;
+namespace MonitorScreenSaver.Core;
 
 public enum OverlayMode
 {
@@ -11,10 +11,84 @@ public enum OverlayMode
 
     /// <summary>Partially opaque black, so the screen stays readable underneath.</summary>
     Dim,
+
+    /// <summary>
+    /// A looping muted video instead of black. Still protects against burn-in — motion
+    /// spreads the wear — just less effectively than true black, and more the darker
+    /// and busier the clip is.
+    /// </summary>
+    Video,
+}
+
+public enum VideoStretch
+{
+    /// <summary>Keep aspect ratio, letterbox with black bars (Stretch.Uniform).</summary>
+    Fit,
+
+    /// <summary>Keep aspect ratio, crop to cover the whole screen (Stretch.UniformToFill).</summary>
+    Fill,
+
+    /// <summary>Ignore aspect ratio, distort to the screen (Stretch.Fill).</summary>
+    Stretch,
+}
+
+/// <summary>
+/// The overlay appearance for one display (or for all of them, when per-display
+/// configuration is off). A mutable record: value equality is what the overlay
+/// rebuild logic keys on.
+/// </summary>
+public sealed record MonitorConfig
+{
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public OverlayMode Mode { get; set; } = OverlayMode.TrueBlack;
+
+    /// <summary>How dark the Dim overlay is, in percent. 100 would equal true black.</summary>
+    public int DimPercent { get; set; } = 75;
+
+    /// <summary>Absolute path of the video played in Video mode.</summary>
+    public string? VideoPath { get; set; }
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public VideoStretch VideoStretch { get; set; } = VideoStretch.Fit;
+
+    /// <summary>Overlay alpha actually applied. Video is always an opaque window.</summary>
+    [JsonIgnore]
+    public byte Alpha => Mode == OverlayMode.Dim
+        ? (byte)Math.Clamp(DimPercent * 255 / 100, 13, 255)
+        : (byte)255;
+
+    /// <summary>Dim at 100% collapses to an ordinary opaque window, same as true black.</summary>
+    [JsonIgnore]
+    public bool Translucent => Mode == OverlayMode.Dim && Alpha < 255;
+
+    public MonitorConfig Clamped()
+    {
+        DimPercent = Math.Clamp(DimPercent, 5, 100);
+        if (string.IsNullOrWhiteSpace(VideoPath)) VideoPath = null;
+        return this;
+    }
+
+    /// <summary>Short human summary for the display list ("dim 75%", "video · fit").</summary>
+    [JsonIgnore]
+    public string Summary => Mode switch
+    {
+        OverlayMode.Dim => $"dim {DimPercent}%",
+        OverlayMode.Video => VideoPath is null
+            ? "video · no file"
+            : $"video · {Path.GetFileName(VideoPath)} · {VideoStretch.ToString().ToLowerInvariant()}",
+        _ => "true black",
+    };
 }
 
 public sealed class AppSettings
 {
+    // ---- Overlay appearance ----------------------------------------------------
+    //
+    // Mode/DimPercent stay as root JSON properties for compatibility with settings
+    // files written before per-display configuration existed. Together with
+    // VideoPath/VideoStretch they form the "all displays" config; PerMonitor holds
+    // per-display overrides keyed by StableId, used only when PerMonitorConfig is on.
+
     /// <summary>True black stops burn-in accrual outright; dim only slows it.</summary>
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public OverlayMode Mode { get; set; } = OverlayMode.TrueBlack;
@@ -22,13 +96,56 @@ public sealed class AppSettings
     /// <summary>How dark the Dim overlay is, in percent. 100 would equal true black.</summary>
     public int DimPercent { get; set; } = 75;
 
-    /// <summary>Overlay alpha actually applied to the layered window.</summary>
-    [JsonIgnore]
-    public byte OverlayAlpha => Mode == OverlayMode.TrueBlack
-        ? (byte)255
-        : (byte)Math.Clamp(DimPercent * 255 / 100, 13, 255);
+    /// <summary>Video played in Video mode, when configuration is shared.</summary>
+    public string? VideoPath { get; set; }
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public VideoStretch VideoStretch { get; set; } = VideoStretch.Fit;
+
+    /// <summary>When true, each display uses its own <see cref="PerMonitor"/> entry.</summary>
+    public bool PerMonitorConfig { get; set; }
+
+    /// <summary>Per-display overrides, keyed by the display's stable hardware id.</summary>
+    public Dictionary<string, MonitorConfig> PerMonitor { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The config that applies to every display when per-display is off.</summary>
+    public MonitorConfig GlobalConfig() => new()
+    {
+        Mode = Mode,
+        DimPercent = DimPercent,
+        VideoPath = VideoPath,
+        VideoStretch = VideoStretch,
+    };
+
+    public void ApplyGlobal(MonitorConfig cfg)
+    {
+        Mode = cfg.Mode;
+        DimPercent = cfg.DimPercent;
+        VideoPath = cfg.VideoPath;
+        VideoStretch = cfg.VideoStretch;
+    }
+
+    /// <summary>The effective config for one display.</summary>
+    public MonitorConfig ConfigFor(string stableId) =>
+        PerMonitorConfig && PerMonitor.TryGetValue(stableId, out var o) ? o : GlobalConfig();
+
+    /// <summary>The override for one display, created from the global config on first use.</summary>
+    public MonitorConfig OverrideFor(string stableId)
+    {
+        if (!PerMonitor.TryGetValue(stableId, out var o))
+        {
+            o = GlobalConfig();
+            PerMonitor[stableId] = o;
+        }
+
+        return o;
+    }
 
     public static string Directory => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MonitorScreenSaver");
+
+    /// <summary>Settings home before the rename; migrated from on first run.</summary>
+    public static string LegacyDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MonitorDim");
 
     public static string FilePath => Path.Combine(Directory, "settings.json");
@@ -67,6 +184,12 @@ public sealed class AppSettings
     /// <summary>Windows does not do this by itself; it protects exclusive-fullscreen swapchains.</summary>
     public bool NeverBlankDuringFullscreen { get; set; } = true;
 
+    /// <summary>
+    /// Treat audible audio as activity, the way oled_aegis treats media. Off by default:
+    /// someone listening to music typically *wants* the screens blanked.
+    /// </summary>
+    public bool NeverBlankDuringAudio { get; set; }
+
     // ---- Startup / lifecycle --------------------------------------------------
 
     public bool StartWithWindows { get; set; }
@@ -78,6 +201,8 @@ public sealed class AppSettings
     {
         try
         {
+            MigrateLegacyFile();
+
             if (File.Exists(FilePath))
             {
                 var json = File.ReadAllText(FilePath);
@@ -91,6 +216,23 @@ public sealed class AppSettings
         }
 
         return new AppSettings();
+    }
+
+    /// <summary>Carries settings over from %APPDATA%\MonitorDim after the rename.</summary>
+    private static void MigrateLegacyFile()
+    {
+        try
+        {
+            var legacy = Path.Combine(LegacyDirectory, "settings.json");
+            if (File.Exists(FilePath) || !File.Exists(legacy)) return;
+
+            System.IO.Directory.CreateDirectory(Directory);
+            File.Copy(legacy, FilePath);
+        }
+        catch
+        {
+            // best effort; a fresh default is acceptable
+        }
     }
 
     public void Save()
@@ -113,7 +255,13 @@ public sealed class AppSettings
         IdleTimeoutSeconds = Math.Clamp(IdleTimeoutSeconds, 10, 24 * 60 * 60);
         PollIntervalMs = Math.Clamp(PollIntervalMs, 100, 5000);
         DimPercent = Math.Clamp(DimPercent, 5, 100);
+        if (string.IsNullOrWhiteSpace(VideoPath)) VideoPath = null;
         ManagedDisplayIds = ManagedDisplayIds.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().ToList();
+
+        PerMonitor = PerMonitor
+            .Where(kv => !string.IsNullOrWhiteSpace(kv.Key) && kv.Value is not null)
+            .ToDictionary(kv => kv.Key, kv => kv.Value.Clamped(), StringComparer.OrdinalIgnoreCase);
+
         return this;
     }
 

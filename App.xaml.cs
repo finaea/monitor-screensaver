@@ -1,16 +1,16 @@
 ﻿using System.Windows;
 using System.Windows.Threading;
-using MonitorDim.Core;
-using MonitorDim.UI;
+using MonitorScreenSaver.Core;
+using MonitorScreenSaver.UI;
 using Forms = System.Windows.Forms;
 using Drawing = System.Drawing;
 
-namespace MonitorDim;
+namespace MonitorScreenSaver;
 
 public partial class App : System.Windows.Application
 {
     internal const string RelaunchFlag = "--relaunch";
-    private const string SingleInstanceName = @"Local\MonitorDim.SingleInstance";
+    private const string SingleInstanceName = @"Local\MonitorScreenSaver.SingleInstance";
 
     private static Mutex? _singleInstance;
 
@@ -129,7 +129,13 @@ public partial class App : System.Windows.Application
 
         _engine = new BlankingEngine(_settings);
         _engine.BlankStateChanged += OnBlankStateChanged;
+        _engine.VideoOverlayVisible = () => _overlays.AnyVideoVisible;
         _engine.Start();
+
+        // Best effort: carry the Run-key / scheduled-task entry over from the app's
+        // pre-rename identity so autostart survives the upgrade.
+        if (_settings.StartWithWindows)
+            AutoStart.MigrateLegacy(checkTask: _settings.StartElevated);
 
         _events = new SystemEventSink();
         _events.Event += OnSystemEvent;
@@ -164,7 +170,7 @@ public partial class App : System.Windows.Application
             ShowImageMargin = false,
         };
 
-        _headerItem = new Forms.ToolStripMenuItem("MonitorDim") { Enabled = false };
+        _headerItem = new Forms.ToolStripMenuItem("MonitorScreenSaver") { Enabled = false };
 
         _requestersItem = new Forms.ToolStripMenuItem("Holding display awake");
 
@@ -201,7 +207,7 @@ public partial class App : System.Windows.Application
         {
             Icon = LoadTrayIcon(),
             Visible = true,
-            Text = "MonitorDim",
+            Text = "MonitorScreenSaver",
             ContextMenuStrip = _menu,
         };
 
@@ -212,7 +218,7 @@ public partial class App : System.Windows.Application
     {
         try
         {
-            var uri = new Uri("pack://application:,,,/Assets/MonitorDim.ico", UriKind.Absolute);
+            var uri = new Uri("pack://application:,,,/Assets/MonitorScreenSaver.ico", UriKind.Absolute);
             var stream = GetResourceStream(uri)?.Stream;
             if (stream is not null)
             {
@@ -247,10 +253,10 @@ public partial class App : System.Windows.Application
         var s = _engine.Status;
 
         _headerItem.Text = s.Paused
-            ? "MonitorDim — paused"
+            ? "MonitorScreenSaver — paused"
             : s.Blanked
-                ? "MonitorDim — blanked"
-                : $"MonitorDim — {Describe(s.Reason)}, blanks in {Format(s.UntilBlank)}";
+                ? "MonitorScreenSaver — blanked"
+                : $"MonitorScreenSaver — {Describe(s.Reason)}, blanks in {Format(s.UntilBlank)}";
 
         _pauseItem.Text = s.Paused ? "Resume blanking" : "Pause blanking";
 
@@ -326,6 +332,7 @@ public partial class App : System.Windows.Application
         AwakeReason.ForegroundChange => "window focus",
         AwakeReason.DisplayRequest => "app request",
         AwakeReason.Fullscreen => "fullscreen",
+        AwakeReason.Audio => "audio",
         AwakeReason.Resumed => "resumed",
         AwakeReason.Paused => "paused",
         _ => "idle",
@@ -347,7 +354,7 @@ public partial class App : System.Windows.Application
 
         if (error is not null)
         {
-            Forms.MessageBox.Show(error, "MonitorDim", Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Warning);
+            Forms.MessageBox.Show(error, "MonitorScreenSaver", Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Warning);
             return;
         }
 
@@ -359,8 +366,8 @@ public partial class App : System.Windows.Application
     {
         if (PowerRequestList.IsElevated)
         {
-            System.Windows.MessageBox.Show("MonitorDim is already running elevated.",
-                "MonitorDim", MessageBoxButton.OK, MessageBoxImage.Information);
+            System.Windows.MessageBox.Show("MonitorScreenSaver is already running elevated.",
+                "MonitorScreenSaver", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -385,7 +392,7 @@ public partial class App : System.Windows.Application
 
             System.Windows.MessageBox.Show(
                 $"Could not restart elevated.\n\n{error.Message}",
-                "MonitorDim", MessageBoxButton.OK, MessageBoxImage.Warning);
+                "MonitorScreenSaver", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -402,7 +409,7 @@ public partial class App : System.Windows.Application
 
             System.Windows.MessageBox.Show(
                 $"The settings window failed to open.\n\n{ex.GetType().Name}: {ex.Message}\n\nDetails: {CrashLog.FilePath}",
-                "MonitorDim", MessageBoxButton.OK, MessageBoxImage.Warning);
+                "MonitorScreenSaver", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 

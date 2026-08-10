@@ -6,6 +6,7 @@
 global using Brush = System.Windows.Media.Brush;
 global using Brushes = System.Windows.Media.Brushes;
 global using Button = System.Windows.Controls.Button;
+global using RadioButton = System.Windows.Controls.RadioButton;
 global using Cursors = System.Windows.Input.Cursors;
 global using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 global using Point = System.Windows.Point;

@@ -1,7 +1,7 @@
 ﻿using System.Drawing;
 using System.Windows.Forms;
 
-namespace MonitorDim.UI;
+namespace MonitorScreenSaver.UI;
 
 /// <summary>Dark colour table + renderer so the tray menu matches the settings window.</summary>
 internal sealed class DarkColorTable : ProfessionalColorTable

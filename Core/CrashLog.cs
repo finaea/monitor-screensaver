@@ -1,9 +1,9 @@
 ﻿using System.IO;
 
-namespace MonitorDim.Core;
+namespace MonitorScreenSaver.Core;
 
 /// <summary>
-/// Writes anything that would otherwise vanish to %APPDATA%\MonitorDim\error.log.
+/// Writes anything that would otherwise vanish to %APPDATA%\MonitorScreenSaver\error.log.
 ///
 /// Swallowing exceptions silently (which an earlier version did) turns a crash into
 /// "the window just didn't appear", so every catch site that intentionally continues

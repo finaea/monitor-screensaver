@@ -2,7 +2,7 @@
 using System.Security.Principal;
 using System.Text.RegularExpressions;
 
-namespace MonitorDim.Core;
+namespace MonitorScreenSaver.Core;
 
 public enum RequesterKind { Process, Service, Driver, Unknown }
 

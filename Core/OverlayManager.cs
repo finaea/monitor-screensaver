@@ -1,8 +1,9 @@
-﻿namespace MonitorDim.Core;
+namespace MonitorScreenSaver.Core;
 
 /// <summary>
 /// Owns one <see cref="OverlayWindow"/> per managed display and keeps that set in sync
-/// with the physical display topology (hotplug, resolution change, resume from sleep).
+/// with the physical display topology (hotplug, resolution change, resume from sleep)
+/// and with each display's effective <see cref="MonitorConfig"/>.
 /// </summary>
 public sealed class OverlayManager : IDisposable
 {
@@ -24,6 +25,13 @@ public sealed class OverlayManager : IDisposable
 
     public IReadOnlyList<string> CoveredDisplayIds =>
         _shown ? _windows.Keys.ToList() : [];
+
+    /// <summary>
+    /// True while any visible overlay is playing video. The engine uses this to ignore
+    /// display power requests that may have been filed by our own media pipeline.
+    /// </summary>
+    public bool AnyVideoVisible =>
+        _shown && _windows.Values.Any(w => w.VideoPlaying);
 
     /// <summary>Re-reads the display topology and rebuilds overlay windows to match.</summary>
     public void Refresh()
@@ -52,7 +60,7 @@ public sealed class OverlayManager : IDisposable
                 Destroy(id);
             }
 
-            var win = new OverlayWindow(target, _settings.OverlayAlpha) { Tag = target.Bounds };
+            var win = new OverlayWindow(target, _settings.ConfigFor(id)) { Tag = target.Bounds };
             win.WakeRequested += () => WakeRequested?.Invoke();
             _windows[id] = win;
 
@@ -72,20 +80,22 @@ public sealed class OverlayManager : IDisposable
     }
 
     /// <summary>
-    /// Pushes the current true-black / dim setting to live overlays. Crossing between
-    /// opaque and translucent needs a fresh window, since AllowsTransparency can only be
-    /// set before the handle exists.
+    /// Pushes each display's current config to its live overlay. Windows that cannot
+    /// morph in place (mode change, opaque/translucent crossing, different video file)
+    /// are rebuilt individually — the others are left untouched.
     /// </summary>
     public void ApplyAppearance()
     {
         if (_disposed) return;
 
-        var alpha = _settings.OverlayAlpha;
-        var needsRebuild = _windows.Values.Any(w => !w.SetAlpha(alpha));
+        var stale = _windows
+            .Where(kv => !kv.Value.TryApply(_settings.ConfigFor(kv.Key)))
+            .Select(kv => kv.Key)
+            .ToList();
 
-        if (!needsRebuild) return;
+        if (stale.Count == 0) return;
 
-        foreach (var id in _windows.Keys.ToList())
+        foreach (var id in stale)
             Destroy(id);
 
         Refresh();

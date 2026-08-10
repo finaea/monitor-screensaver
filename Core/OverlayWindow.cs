@@ -1,18 +1,33 @@
-﻿using System.Windows;
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 
-namespace MonitorDim.Core;
+namespace MonitorScreenSaver.Core;
 
 /// <summary>
-/// A borderless, non-activating, always-on-top pure-black window sized to one monitor's
-/// physical bounds. On OLED a full-black frame drives the pixels to zero emission, which
-/// is the point: no DPMS, no DisplayPort link drop, no window rearrangement on wake.
+/// A borderless, non-activating, always-on-top window sized to one monitor's physical
+/// bounds. Three appearances, resolved from a <see cref="MonitorConfig"/>:
+///
+///   TrueBlack — opaque black. On OLED a full-black frame drives the pixels to zero
+///               emission, which is the point: no DPMS, no DisplayPort link drop, no
+///               window rearrangement on wake.
+///   Dim       — translucent black (AllowsTransparency, software rendered).
+///   Video     — an opaque window playing a muted, looping MediaElement. Weaker burn-in
+///               protection than black: motion spreads the wear, but lit pixels still age.
+///
+/// Mode changes always recreate the window: Dim needs AllowsTransparency (create-time
+/// only), and tearing down a MediaElement with the window is both simpler and leak-proof
+/// compared to morphing in place.
 /// </summary>
 public sealed class OverlayWindow : Window
 {
     private readonly PixelRect _bounds;
+    private MonitorConfig _cfg;
+    private MediaElement? _media;
+
     private Point? _firstCursor;
     private DateTime _shownAt = DateTime.MinValue;
 
@@ -22,28 +37,34 @@ public sealed class OverlayWindow : Window
 
     public event Action? WakeRequested;
 
-    private byte _alpha;
-
     /// <summary>
-    /// True black uses an ordinary opaque window: hardware rendered, no compositing cost.
-    /// Dim needs to show the desktop through, which in WPF means AllowsTransparency — a
-    /// create-time property, and one that switches the window to a software-rendered
-    /// per-pixel-alpha surface (~29 MB on a 5120x1440 panel). So we only pay for it when
-    /// dim is actually selected, and the window has to be recreated to cross the boundary.
+    /// True black and video use an ordinary opaque window: hardware rendered, no
+    /// compositing cost. Dim needs to show the desktop through, which in WPF means
+    /// AllowsTransparency — a create-time property, and one that switches the window to
+    /// a software-rendered per-pixel-alpha surface (~29 MB on a 5120x1440 panel). So we
+    /// only pay for it when dim is actually selected, and the window has to be recreated
+    /// to cross the boundary.
     /// </summary>
     public bool IsTranslucent { get; }
 
-    public OverlayWindow(DisplayTarget target, byte alpha)
+    public bool IsVideo => _cfg.Mode == OverlayMode.Video;
+
+    /// <summary>True when this overlay is visible with a live video element.</summary>
+    public bool VideoPlaying => IsVideo && _media is not null && IsVisible;
+
+    public OverlayWindow(DisplayTarget target, MonitorConfig cfg)
     {
         _bounds = target.Bounds;
-        _alpha = alpha;
-        IsTranslucent = alpha < 255;
+        // Snapshot: the caller hands us the live settings object, and TryApply diffs
+        // against what this window was actually built with.
+        _cfg = cfg with { };
+        IsTranslucent = cfg.Translucent;
 
-        Title = "MonitorDim Overlay";
+        Title = "MonitorScreenSaver Overlay";
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
         AllowsTransparency = IsTranslucent;
-        Background = MakeBrush(alpha);
+        Background = IsTranslucent ? MakeBrush(cfg.Alpha) : Brushes.Black;
         Foreground = Brushes.Black;
         ShowInTaskbar = false;
         ShowActivated = false;
@@ -57,12 +78,83 @@ public sealed class OverlayWindow : Window
         Width = Math.Max(_bounds.Width, 1);
         Height = Math.Max(_bounds.Height, 1);
 
+        if (IsVideo) BuildMedia();
+
         SourceInitialized += OnSourceInitialized;
         PreviewMouseMove += OnMouseMove;
         PreviewMouseDown += (_, _) => Wake();
         PreviewMouseWheel += (_, _) => Wake();
         PreviewKeyDown += (_, _) => Wake();
     }
+
+    // ------------------------------------------------------------------ video
+
+    private void BuildMedia()
+    {
+        var path = _cfg.VideoPath;
+
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            // Degrade to true black rather than failing: on OLED that is the best
+            // possible fallback anyway. Recorded so it doesn't look like "video ignored".
+            CrashLog.Write("OverlayWindow.Video",
+                new FileNotFoundException("Screensaver video not found; showing black.", path));
+            return;
+        }
+
+        _media = new MediaElement
+        {
+            Source = new Uri(path, UriKind.Absolute),
+            // Manual: we own the clock — play on show, stop on hide, rewind on end.
+            LoadedBehavior = MediaState.Manual,
+            UnloadedBehavior = MediaState.Close,
+            // Muted always. A screensaver must not make noise, and the audio-activity
+            // option reads post-mute peaks, so a muted stream can never hold the
+            // screens awake by itself.
+            IsMuted = true,
+            Volume = 0,
+            Stretch = MapStretch(_cfg.VideoStretch),
+            StretchDirection = StretchDirection.Both,
+            IsHitTestVisible = false,
+            Focusable = false,
+        };
+
+        _media.MediaEnded += (_, _) => CrashLog.GuardCallback("MediaElement.Loop", () =>
+        {
+            if (_media is null) return;
+            _media.Position = TimeSpan.Zero;
+            _media.Play();
+        });
+
+        _media.MediaFailed += (_, e) =>
+        {
+            // Bad codec or truncated file: log, drop the element, stay black.
+            CrashLog.Write($"MediaElement.MediaFailed ({path})", e.ErrorException);
+            ClearMedia();
+        };
+
+        Content = _media;
+    }
+
+    private void ClearMedia()
+    {
+        if (_media is null) return;
+
+        try { _media.Stop(); } catch { /* already dead */ }
+        try { _media.Source = null; } catch { /* already dead */ }
+
+        Content = null;
+        _media = null;
+    }
+
+    private static Stretch MapStretch(VideoStretch s) => s switch
+    {
+        VideoStretch.Fill => Stretch.UniformToFill,
+        VideoStretch.Stretch => Stretch.Fill,
+        _ => Stretch.Uniform,
+    };
+
+    // ------------------------------------------------------------------ window plumbing
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
@@ -100,19 +192,31 @@ public sealed class OverlayWindow : Window
     }
 
     /// <summary>
-    /// 255 = true black; anything less lets the desktop show through. Returns false when
-    /// the change crosses the opaque/translucent boundary and the caller must recreate.
+    /// Applies a config change in place when possible. Returns false when the window
+    /// must be recreated: any mode change, a dim change crossing the opaque/translucent
+    /// boundary, or a different video file (a fresh MediaElement beats reusing one).
     /// </summary>
-    public bool SetAlpha(byte alpha)
+    public bool TryApply(MonitorConfig cfg)
     {
-        if (alpha < 255 != IsTranslucent) return false;
+        if (cfg.Mode != _cfg.Mode) return false;
+        if (cfg.Translucent != IsTranslucent) return false;
 
-        if (_alpha != alpha)
+        switch (cfg.Mode)
         {
-            _alpha = alpha;
-            Background = MakeBrush(alpha);
+            case OverlayMode.Dim when cfg.Alpha != _cfg.Alpha:
+                Background = MakeBrush(cfg.Alpha);
+                break;
+
+            case OverlayMode.Video:
+                if (!string.Equals(cfg.VideoPath, _cfg.VideoPath, StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                if (cfg.VideoStretch != _cfg.VideoStretch && _media is not null)
+                    _media.Stretch = MapStretch(cfg.VideoStretch);
+                break;
         }
 
+        _cfg = cfg with { };
         return true;
     }
 
@@ -140,10 +244,30 @@ public sealed class OverlayWindow : Window
 
         ApplyExStyles();
         ApplyBounds();
+
+        if (_media is not null)
+        {
+            try
+            {
+                _media.Position = TimeSpan.Zero;
+                _media.Play();
+            }
+            catch (Exception ex)
+            {
+                CrashLog.Write("OverlayWindow.Play", ex);
+            }
+        }
     }
 
     public void HideOverlay()
     {
+        // Stop, not pause: a hidden window keeps its media clock running otherwise,
+        // burning decode cycles while nothing is visible.
+        if (_media is not null)
+        {
+            try { _media.Stop(); } catch { /* teardown race */ }
+        }
+
         if (IsVisible) Hide();
         _firstCursor = null;
     }

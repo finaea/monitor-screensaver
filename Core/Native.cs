@@ -1,6 +1,6 @@
 ﻿using System.Runtime.InteropServices;
 
-namespace MonitorDim.Core;
+namespace MonitorScreenSaver.Core;
 
 /// <summary>
 /// P/Invoke surface. Grouped by the Windows subsystem each call belongs to so the

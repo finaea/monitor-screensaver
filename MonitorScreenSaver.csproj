@@ -8,13 +8,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
-    <AssemblyName>MonitorDim</AssemblyName>
-    <RootNamespace>MonitorDim</RootNamespace>
-    <ApplicationIcon>Assets\MonitorDim.ico</ApplicationIcon>
+    <AssemblyName>MonitorScreenSaver</AssemblyName>
+    <RootNamespace>MonitorScreenSaver</RootNamespace>
+    <ApplicationIcon>Assets\MonitorScreenSaver.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.0.0</Version>
-    <Product>MonitorDim</Product>
-    <Description>Per-monitor OLED blanking that mirrors the Windows display-idle policy.</Description>
+    <Version>1.1.0</Version>
+    <Product>MonitorScreenSaver</Product>
+    <Description>Per-monitor OLED blanking and video screensaver that mirrors the Windows display-idle policy.</Description>
     <SelfContained>false</SelfContained>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
 
@@ -39,7 +39,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Resource Include="Assets\MonitorDim.ico" />
+    <Resource Include="Assets\MonitorScreenSaver.ico" />
   </ItemGroup>
 
 </Project>

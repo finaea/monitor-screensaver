@@ -2,7 +2,7 @@
 using System.Windows.Threading;
 using Microsoft.Win32;
 
-namespace MonitorDim.Core;
+namespace MonitorScreenSaver.Core;
 
 /// <summary>
 /// Timestamped log of every display-power and session transition Windows reports.
@@ -11,7 +11,7 @@ namespace MonitorDim.Core;
 /// "Console lock display off timeout" still powers the display off when
 /// "Turn off display after" is set to Never.
 ///
-/// Run with:  MonitorDim.exe --watch [path]
+/// Run with:  MonitorScreenSaver.exe --watch [path]
 /// then lock the machine, wait, and unlock. Kill it when done.
 /// </summary>
 public static class WatchMode
@@ -38,7 +38,7 @@ public static class WatchMode
 
         _start = DateTime.Now;
 
-        Write($"MonitorDim --watch  |  started {_start:yyyy-MM-dd HH:mm:ss}");
+        Write($"MonitorScreenSaver --watch  |  started {_start:yyyy-MM-dd HH:mm:ss}");
         Write($"log: {Path.GetFullPath(path)}");
         Write("");
         WritePowerConfig();

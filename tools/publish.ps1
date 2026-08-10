@@ -1,7 +1,7 @@
-﻿# Produces a single self-contained MonitorDim.exe in .\publish
+﻿# Produces a single self-contained MonitorScreenSaver.exe in .\publish
 $root = Split-Path $PSScriptRoot -Parent
 
-dotnet publish (Join-Path $root "MonitorDim.csproj") `
+dotnet publish (Join-Path $root "MonitorScreenSaver.csproj") `
     -c Release `
     -r win-x64 `
     --self-contained true `
@@ -14,6 +14,6 @@ dotnet publish (Join-Path $root "MonitorDim.csproj") `
 # +75 MB of private bytes at idle. Disk is cheaper than RAM for a tray app.
 
 if ($LASTEXITCODE -eq 0) {
-    $exe = Join-Path $root "publish\MonitorDim.exe"
+    $exe = Join-Path $root "publish\MonitorScreenSaver.exe"
     "`nPublished: $exe  ($([Math]::Round((Get-Item $exe).Length / 1MB, 1)) MB)"
 }

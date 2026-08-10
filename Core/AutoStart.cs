@@ -1,7 +1,7 @@
 ﻿using System.Diagnostics;
 using Microsoft.Win32;
 
-namespace MonitorDim.Core;
+namespace MonitorScreenSaver.Core;
 
 /// <summary>
 /// Two start-with-Windows mechanisms:
@@ -13,8 +13,12 @@ namespace MonitorDim.Core;
 public static class AutoStart
 {
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ValueName = "MonitorDim";
-    private const string TaskName = "MonitorDim Autostart";
+    private const string ValueName = "MonitorScreenSaver";
+    private const string TaskName = "MonitorScreenSaver Autostart";
+
+    // Pre-rename identity, migrated away from at startup.
+    private const string LegacyValueName = "MonitorDim";
+    private const string LegacyTaskName = "MonitorDim Autostart";
 
     private static string ExePath => Environment.ProcessPath ?? string.Empty;
 
@@ -35,6 +39,43 @@ public static class AutoStart
             {
                 return false;
             }
+        }
+    }
+
+    /// <summary>
+    /// Replaces the old "MonitorDim" Run-key entry (which points at an exe that no
+    /// longer exists) with one under the new name. The old elevated task is deleted
+    /// too when we have the rights; failing that it is left behind, harmless — its
+    /// target is gone, so it silently does nothing at logon.
+    /// </summary>
+    public static void MigrateLegacy(bool checkTask)
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
+            if (key?.GetValue(LegacyValueName) is not null)
+            {
+                key.DeleteValue(LegacyValueName, throwOnMissingValue: false);
+
+                if (!string.IsNullOrEmpty(ExePath) && key.GetValue(ValueName) is null)
+                    key.SetValue(ValueName, $"\"{ExePath}\"", RegistryValueKind.String);
+            }
+        }
+        catch
+        {
+            // best effort
+        }
+
+        if (!checkTask) return;
+
+        try
+        {
+            if (RunSchtasks($"/query /tn \"{LegacyTaskName}\"").ExitCode == 0)
+                RunSchtasks($"/delete /tn \"{LegacyTaskName}\" /f");
+        }
+        catch
+        {
+            // best effort; deleting an elevated task needs elevation
         }
     }
 

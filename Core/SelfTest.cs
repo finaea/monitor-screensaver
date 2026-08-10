@@ -3,11 +3,11 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Media;
 
-namespace MonitorDim.Core;
+namespace MonitorScreenSaver.Core;
 
 /// <summary>
 /// Headless diagnostic. Exercises every detection path the engine depends on and writes
-/// a report. Run with:  MonitorDim.exe --selftest [path]
+/// a report. Run with:  MonitorScreenSaver.exe --selftest [path]
 /// </summary>
 public static class SelfTest
 {
@@ -16,7 +16,7 @@ public static class SelfTest
 
     public static int Run(string? outputPath)
     {
-        Line($"MonitorDim self-test  |  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        Line($"MonitorScreenSaver self-test  |  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         Line($"OS {Environment.OSVersion.Version}  |  process {(Environment.Is64BitProcess ? "x64" : "x86")}  |  elevated={PowerRequestList.IsElevated}");
         Line(new string('=', 78));
 
@@ -28,6 +28,7 @@ public static class SelfTest
         Category2Live();
         Category1();
         FullscreenProbe();
+        AudioProbe();
         ParserCheck();
         LiveRequesterQuery();
         SettingsCheck();
@@ -87,7 +88,7 @@ public static class SelfTest
             // exercise every family the UI actually uses, in both formatting modes.
             (string Font, string Sample)[] cases =
             [
-                ("Segoe UI Variable Text, Segoe UI", "MonitorDim 0123 idle 5m 0s"),
+                ("Segoe UI Variable Text, Segoe UI", "MonitorScreenSaver 0123 idle 5m 0s"),
                 ("Cascadia Mono, Consolas", @"\\.\DISPLAY1  5120 x 1440"),
                 ("Segoe MDL2 Assets", "\uE921\uE8BB"),
                 ("Segoe UI", "Console lock display off timeout"),
@@ -149,9 +150,9 @@ public static class SelfTest
 
         try
         {
-            var uri = new Uri("pack://application:,,,/Assets/MonitorDim.ico", UriKind.Absolute);
+            var uri = new Uri("pack://application:,,,/Assets/MonitorScreenSaver.ico", UriKind.Absolute);
             var info = System.Windows.Application.GetResourceStream(uri);
-            Check(info?.Stream is not null, "icon found at pack://application:,,,/Assets/MonitorDim.ico");
+            Check(info?.Stream is not null, "icon found at pack://application:,,,/Assets/MonitorScreenSaver.ico");
 
             if (info?.Stream is null) return;
 
@@ -231,7 +232,7 @@ public static class SelfTest
 
                 try
                 {
-                    win = new OverlayWindow(d, alpha: 255);
+                    win = new OverlayWindow(d, new MonitorConfig { Mode = OverlayMode.TrueBlack });
                     win.ShowOverlay();
 
                     var hwnd = new System.Windows.Interop.WindowInteropHelper(win).Handle;
@@ -257,8 +258,10 @@ public static class SelfTest
                     // Opaque overlays must stay opaque (cheap, hardware rendered), and must
                     // refuse an in-place switch to dim rather than silently no-op.
                     Check(!win.IsTranslucent, $"{d.FriendlyName}: true black uses an opaque window");
-                    Check(!win.SetAlpha(180), $"{d.FriendlyName}: switching to dim correctly demands a rebuild");
-                    Check(win.SetAlpha(255), $"{d.FriendlyName}: staying at true black is applied in place");
+                    Check(!win.TryApply(new MonitorConfig { Mode = OverlayMode.Dim, DimPercent = 70 }),
+                        $"{d.FriendlyName}: switching to dim correctly demands a rebuild");
+                    Check(win.TryApply(new MonitorConfig { Mode = OverlayMode.TrueBlack }),
+                        $"{d.FriendlyName}: staying at true black is applied in place");
                 }
                 finally
                 {
@@ -267,6 +270,7 @@ public static class SelfTest
             }
 
             DimOverlay();
+            VideoOverlay();
         }
         catch (Exception ex)
         {
@@ -284,7 +288,7 @@ public static class SelfTest
 
         try
         {
-            win = new OverlayWindow(target, alpha: 180);
+            win = new OverlayWindow(target, new MonitorConfig { Mode = OverlayMode.Dim, DimPercent = 70 });
             win.ShowOverlay();
 
             var hwnd = new System.Windows.Interop.WindowInteropHelper(win).Handle;
@@ -304,8 +308,56 @@ public static class SelfTest
                     $"{target.FriendlyName}: dim overlay placed at ({r.Left},{r.Top})-({r.Right},{r.Bottom})");
             }
 
-            Check(win.SetAlpha(120), $"{target.FriendlyName}: dim level changes in place");
-            Check(!win.SetAlpha(255), $"{target.FriendlyName}: switching to true black correctly demands a rebuild");
+            Check(win.TryApply(new MonitorConfig { Mode = OverlayMode.Dim, DimPercent = 47 }),
+                $"{target.FriendlyName}: dim level changes in place");
+            Check(!win.TryApply(new MonitorConfig { Mode = OverlayMode.TrueBlack }),
+                $"{target.FriendlyName}: switching to true black correctly demands a rebuild");
+        }
+        finally
+        {
+            try { win?.HideOverlay(); win?.Close(); } catch { /* teardown */ }
+        }
+    }
+
+    /// <summary>
+    /// Video mode without a usable file must degrade to an opaque black window — on
+    /// OLED that is the correct fallback — and config changes must demand rebuilds
+    /// exactly where a fresh MediaElement is needed.
+    /// </summary>
+    private static void VideoOverlay()
+    {
+        var target = DisplayEnumerator.Enumerate().FirstOrDefault();
+        if (target is null) return;
+
+        var missing = Path.Combine(Path.GetTempPath(), "monitorscreensaver-selftest-missing.mp4");
+        var cfg = new MonitorConfig { Mode = OverlayMode.Video, VideoPath = missing, VideoStretch = VideoStretch.Fit };
+
+        OverlayWindow? win = null;
+
+        try
+        {
+            win = new OverlayWindow(target, cfg);
+            win.ShowOverlay();
+
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(win).Handle;
+            Check(hwnd != IntPtr.Zero, $"{target.FriendlyName}: video overlay window created");
+            Check(!win.IsTranslucent, $"{target.FriendlyName}: video overlay is an opaque window");
+            Check(win.IsVideo, $"{target.FriendlyName}: video overlay reports video mode");
+            Check(!win.VideoPlaying, $"{target.FriendlyName}: missing file degrades to black (no media element)");
+
+            if (Native.GetWindowRect(hwnd, out var r))
+            {
+                var w = target.Bounds;
+                Check(r.Left == w.Left && r.Top == w.Top && r.Right == w.Right && r.Bottom == w.Bottom,
+                    $"{target.FriendlyName}: video overlay placed at ({r.Left},{r.Top})-({r.Right},{r.Bottom})");
+            }
+
+            Check(win.TryApply(cfg with { VideoStretch = VideoStretch.Fill }),
+                $"{target.FriendlyName}: stretch mode changes in place");
+            Check(!win.TryApply(cfg with { VideoPath = missing + ".other.mp4" }),
+                $"{target.FriendlyName}: a different video file correctly demands a rebuild");
+            Check(!win.TryApply(new MonitorConfig { Mode = OverlayMode.TrueBlack }),
+                $"{target.FriendlyName}: switching to true black correctly demands a rebuild");
         }
         finally
         {
@@ -373,7 +425,7 @@ public static class SelfTest
             {
                 Version = 0,
                 Flags = Native.POWER_REQUEST_CONTEXT_SIMPLE_STRING,
-                SimpleReasonString = "MonitorDim self-test",
+                SimpleReasonString = "MonitorScreenSaver self-test",
             };
 
             var handle = Native.PowerCreateRequest(ref ctx);
@@ -449,6 +501,28 @@ public static class SelfTest
         catch (Exception ex)
         {
             Fail($"threw: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The audio-activity option reads WASAPI endpoint peak meters. Exercise the whole
+    /// interop path: enumerate active render endpoints and take a live peak reading.
+    /// Zero endpoints is legal (headless box); an exception is the failure.
+    /// </summary>
+    private static void AudioProbe()
+    {
+        Section("Audio activity probe (WASAPI endpoint meters)");
+
+        try
+        {
+            var (endpoints, peak) = AudioActivity.Probe();
+            Check(endpoints >= 0, $"enumerated {endpoints} active render endpoint(s)");
+            Check(peak is >= 0f and <= 1f, $"live peak reading {peak:F4} is in range 0..1");
+            Line($"    IsPlaying() -> {AudioActivity.IsPlaying()}");
+        }
+        catch (Exception ex)
+        {
+            Fail($"threw: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -552,6 +626,16 @@ public static class SelfTest
             Check(s.IdleTimeoutSeconds is >= 10 and <= 86400, "timeout within clamp range");
             Check(s.PollIntervalMs is >= 100 and <= 5000, "poll interval within clamp range");
             Check(AutoStart.IsEnabled == AutoStart.IsEnabled, $"autostart query works (enabled={AutoStart.IsEnabled}, elevatedTask={AutoStart.IsElevatedTask})");
+
+            // Per-display config resolution, entirely in memory.
+            var probe = new AppSettings { Mode = OverlayMode.Dim, DimPercent = 40 };
+            Check(probe.ConfigFor("X").Mode == OverlayMode.Dim, "shared config applies when per-display is off");
+
+            probe.PerMonitorConfig = true;
+            probe.PerMonitor["X"] = new MonitorConfig { Mode = OverlayMode.Video, VideoPath = @"C:\x.mp4" };
+            Check(probe.ConfigFor("X").Mode == OverlayMode.Video, "per-display override wins when per-display is on");
+            Check(probe.ConfigFor("Y").Mode == OverlayMode.Dim, "display without an override falls back to the shared config");
+            Check(probe.OverrideFor("Y").DimPercent == 40, "first-touch override is seeded from the shared config");
         }
         catch (Exception ex)
         {

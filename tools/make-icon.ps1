@@ -1,4 +1,4 @@
-# Generates Assets/MonitorDim.ico, plus Assets/icon.png for the README
+# Generates Assets/MonitorScreenSaver.ico, plus Assets/icon.png for the README
 #
 # The mark is the hoshinosleep artwork with the dim badge overlaid bottom-right.
 # The badge is the same half-filled contrast glyph the icon has always used, still
@@ -8,7 +8,7 @@ Add-Type -AssemblyName System.Drawing
 
 $outDir = Join-Path $PSScriptRoot "..\Assets"
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
-$icoPath = Join-Path $outDir "MonitorDim.ico"
+$icoPath = Join-Path $outDir "MonitorScreenSaver.ico"
 $pngPath = Join-Path $outDir "icon.png"
 
 $srcPath = Join-Path $PSScriptRoot "..\hoshinosleep.png"

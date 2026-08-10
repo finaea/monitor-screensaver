@@ -1,4 +1,4 @@
-# MonitorDim — technical notes
+# MonitorScreenSaver — technical notes
 
 How the thing actually works, what was measured, and the traps found along the way.
 For install and day-to-day use, see the [README](README.md).
@@ -46,23 +46,68 @@ fresh full timeout instead of blanking instantly.
 |---|---|---|
 | **True black** (default) | Fully opaque black. OLED pixels emit nothing, so burn-in accrual stops outright. | Ordinary opaque window, hardware rendered |
 | **Dim** | Partially opaque black at a chosen percentage; the screen stays readable underneath. | `AllowsTransparency` window, software-rendered per-pixel alpha |
+| **Video** | A muted looping video. Weaker burn-in protection than black — motion spreads wear, but pixels stay lit. | Opaque window hosting a `MediaElement` (Media Foundation, DXVA) |
 
-Two implementation notes worth keeping:
+Implementation notes worth keeping:
 
 - **`SetWindowLongPtr(WS_EX_LAYERED)` does not stick on a WPF window.** `HwndTarget`
   rewrites the extended style while realising the window, so the uniform-alpha route
   (`SetLayeredWindowAttributes`, which would have stayed DWM-composited) is unavailable.
   WPF's own `AllowsTransparency` is the only supported path.
 - **`AllowsTransparency` is a create-time property**, and it costs a software-rendered
-  surface — roughly 29 MB on a 5120x1440 panel. So true black keeps an ordinary opaque
-  window and pays nothing, and crossing between the two modes recreates the overlay
-  rather than trying to mutate it. `OverlayWindow.SetAlpha` returns false to signal that.
+  surface — roughly 29 MB on a 5120x1440 panel. So true black and video keep an ordinary
+  opaque window and pay nothing, and crossing into or out of dim recreates the overlay
+  rather than trying to mutate it. `OverlayWindow.TryApply` returns false to signal that;
+  the manager rebuilds exactly the windows that refused, not the whole set.
+- **In-place vs rebuild:** dim level and video stretch change in place; any mode change,
+  a dim change crossing the 100% (opaque) boundary, or a different video file rebuilds
+  that one window. A fresh `MediaElement` per file beats reusing one — it releases the
+  old decoder topology outright.
+
+### Per-display configuration
+
+`MonitorConfig` (mode, dim %, video path, stretch) is resolved per display:
+`AppSettings.ConfigFor(stableId)` returns the display's override when **per-display
+config** is on and one exists, otherwise the shared root config. Overrides are seeded
+from the shared config on first touch (`OverrideFor`), keyed by the same stable hardware
+id used for the managed-display list, so they survive replug and renumbering. The root
+`Mode`/`DimPercent` JSON properties are unchanged from earlier versions, so pre-existing
+settings files load as-is.
+
+### Video mode details
+
+- `MediaElement` with `LoadedBehavior=Manual`: play starts on overlay show, `Stop()` on
+  hide (a hidden window would otherwise keep decoding), rewind-and-play on `MediaEnded`
+  for a seamless-enough loop.
+- Always muted (`IsMuted` + `Volume=0`). A screensaver must not make noise — and the
+  audio-activity option reads post-mute peaks, so the video can never hold the screens
+  awake through the audio path either.
+- Any container/codec Media Foundation can decode. MP4/H.264/WMV are always there;
+  HEVC and some MKV/WebM depend on installed codecs. `MediaFailed` logs to error.log and
+  degrades that overlay to plain black — same for a missing file, which on OLED is the
+  correct fallback anyway.
+- Aspect handling is `Stretch.Uniform` (Fit), `UniformToFill` (Fill) or `Fill` (Stretch),
+  so any source resolution/ratio maps onto any panel, portrait included.
+- **Self-request guard:** media pipelines can file their own `ES_DISPLAY_REQUIRED`
+  ("Playing video"). Honouring our own request would unblank the screens we just
+  covered, so while blanked with a video overlay visible, display requests are not
+  treated as fresh activity (`BlankingEngine.VideoOverlayVisible`). Requests cannot be
+  attributed without admin, so this also ignores foreign requests that begin mid-blank —
+  accepted: those arrive with input (Parsec connect, incoming call) which wakes as usual.
 
 ### Beyond Windows (opt-in, clearly labelled in the UI)
 
 - **Never blank during exclusive fullscreen** — `SHQueryUserNotificationState` returning
   `QUNS_RUNNING_D3D_FULL_SCREEN` / `QUNS_PRESENTATION_MODE`. Windows does *not* do this;
   it exists because an overlay over an exclusive-fullscreen swapchain is a functional hazard.
+- **Never blank while audio is playing** — WASAPI endpoint peak meters
+  (`IAudioMeterInformation` on every ACTIVE render endpoint, max instantaneous peak
+  > 0.001 counts as audible). Same signal oled_aegis keys on. Endpoint meters read the
+  post-mix, post-mute signal, so muted streams — including our own video overlay — never
+  count. Meters are cached and re-enumerated every 5 s or on any COM failure. Audio only
+  *prevents* blanking, it never unblanks: the activity tick is not pushed while blanked,
+  so starting music with dark screens leaves them dark. Off by default — someone
+  listening to music typically wants the screens blanked.
 
 ---
 
@@ -111,7 +156,7 @@ Displays are keyed by hardware id (`MONITOR\ACR0C5D\{4d36e96e-…}\0005`), not b
 
 ## Windows power settings this app depends on
 
-MonitorDim only gets to act inside the window before Windows' own display timeout fires, so
+MonitorScreenSaver only gets to act inside the window before Windows' own display timeout fires, so
 that timeout has to be longer than the app's idle timeout:
 
 ```powershell
@@ -121,7 +166,7 @@ powercfg /change monitor-timeout-dc 1800
 
 **Long-but-finite beats `Never`.** The console-lock timeout below has to stay *smaller* than
 this one to keep working, and `Never` may or may not suppress it (see the unresolved note at
-the end of the next section). With a 30-minute backstop, MonitorDim handles the everyday
+the end of the next section). With a 30-minute backstop, MonitorScreenSaver handles the everyday
 5-minute case and Windows only takes over after a full half hour of no lock and no input —
 rare enough that eating one rearrangement is cheap.
 
@@ -129,7 +174,7 @@ rare enough that eating one rearrangement is cheap.
 
 ## The lock screen (measured)
 
-**MonitorDim cannot help here at all.** The Windows lock screen runs on the Winlogon
+**MonitorScreenSaver cannot help here at all.** The Windows lock screen runs on the Winlogon
 desktop, so no user-mode window can draw over it. Whatever happens on that screen is entirely
 Windows' DPMS, and the only lever is a power setting.
 
@@ -197,7 +242,7 @@ Pick roughly the length of a typical short break. 180–300s is the sane middle.
 ```powershell
 dotnet build                 # dev build
 .\tools\publish.ps1          # single self-contained exe in .\publish
-.\tools\make-icon.ps1        # regenerate Assets\MonitorDim.ico + Assets\icon.png
+.\tools\make-icon.ps1        # regenerate Assets\MonitorScreenSaver.ico + Assets\icon.png
 ```
 
 Requires the .NET 9 SDK. Targets `net9.0-windows`, `win-x64`.
@@ -228,10 +273,10 @@ Two csproj settings that are load-bearing, both commented in place:
 ## Self-test
 
 ```powershell
-MonitorDim.exe --selftest report.txt
+MonitorScreenSaver.exe --selftest report.txt
 ```
 
-Headless — no tray, no windows, no engine. 89 checks covering:
+Headless — no tray, no windows, no engine. 103 checks covering:
 
 - WPF text layout forced through every font family the UI uses, in both formatting modes,
   plus every Theme.xaml brush and style (this is what catches globalization/font regressions
@@ -241,10 +286,14 @@ Headless — no tray, no windows, no engine. 89 checks covering:
 - display enumeration and EDID friendly names
 - overlay placement verified against `GetWindowRect` on every monitor, in both true-black
   and dim modes, including that switching between them correctly demands a rebuild
+- video-mode overlays: opaque, placed correctly, missing file degrades to black, stretch
+  changes in place while a different file or mode demands a rebuild
+- the WASAPI audio probe: endpoint enumeration plus a live peak reading through the same
+  interop the audio-activity option uses
 - power-request detection through **both** the legacy and modern APIs
 - idle arithmetic including the 32-bit `GetLastInputInfo` tick wrap
 - the `powercfg /requests` parser
-- settings round-trip and autostart queries
+- settings round-trip, per-display config resolution, and autostart queries
 
 Exit code 0 = all passed.
 
@@ -255,7 +304,7 @@ Exit code 0 = all passed.
 ## Watch mode
 
 ```powershell
-MonitorDim.exe --watch watch.log
+MonitorScreenSaver.exe --watch watch.log
 ```
 
 Logs every display-power and session transition Windows reports, with timestamps, plus a
@@ -283,7 +332,7 @@ being laid out. Workstation non-concurrent GC accounts for most of the saving ov
 
 ### Working set is the wrong number to quote
 
-Splitting a live process (settings window closed, via `\Process(MonitorDim)\Working Set -
+Splitting a live process (settings window closed, via `\Process(MonitorScreenSaver)\Working Set -
 Private`) shows how little of it is really this app's:
 
 | | |
@@ -306,11 +355,11 @@ Direct3D, so any window pulls in the vendor D3D runtime and shader compilers:
 | `nvd3dumx.dll` | 41.4 MB | NVIDIA D3D user-mode driver |
 
 Both vendors are mapped on the test machine; it has displays across the integrated and
-discrete GPUs. None of this is memory MonitorDim allocates, and none of it is avoidable while
+discrete GPUs. None of this is memory MonitorScreenSaver allocates, and none of it is avoidable while
 the UI is WPF.
 
 Single-file publish also extracts 8.0 MB of native libraries (5 files) to
-`%TEMP%\.net\MonitorDim\<hash>\` on first run. Disk, not memory.
+`%TEMP%\.net\MonitorScreenSaver\<hash>\` on first run. Disk, not memory.
 
 The floor here is WPF + WinForms both being loaded; WinForms is present solely for the tray
 `NotifyIcon`. Replacing it with a raw `Shell_NotifyIcon` P/Invoke and a WPF `ContextMenu`
@@ -321,7 +370,7 @@ would cut further and let the tray menu use the same dark theme as the settings 
 ## Diagnostics
 
 Unhandled exceptions, swallowed exceptions and failed callbacks all append to
-`%APPDATA%\MonitorDim\error.log`. Check there first — a window that fails to build looks
+`%APPDATA%\MonitorScreenSaver\error.log`. Check there first — a window that fails to build looks
 identical to "nothing happened" otherwise.
 
 Two failure modes are worth knowing about:
@@ -341,10 +390,12 @@ Two failure modes are worth knowing about:
 
 ```
 App.xaml.cs               tray icon, menu, wiring, lifecycle
+Core/AppSettings.cs       settings + MonitorConfig, per-display resolution
 Core/BlankingEngine.cs    the policy — category 1 + category 2 decision
+Core/AudioActivity.cs     WASAPI endpoint peak meters (audio-activity option)
 Core/PowerRequests.cs     SystemExecutionState + powercfg /requests parser
-Core/OverlayWindow.cs     one black non-activating topmost window
-Core/OverlayManager.cs    keeps overlays in sync with the display topology
+Core/OverlayWindow.cs     one non-activating topmost window: black, dim or video
+Core/OverlayManager.cs    keeps overlays in sync with topology + per-display config
 Core/DisplayEnumerator.cs monitor enumeration + EDID friendly names
 Core/SystemEventSink.cs   sleep / hotplug / lock notifications
 Core/SelfTest.cs          headless diagnostics (--selftest)

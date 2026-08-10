@@ -1,6 +1,7 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -8,9 +9,9 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using MonitorDim.Core;
+using MonitorScreenSaver.Core;
 
-namespace MonitorDim.UI;
+namespace MonitorScreenSaver.UI;
 
 public sealed class DisplayRow : INotifyPropertyChanged
 {
@@ -39,6 +40,14 @@ public sealed class DisplayRow : INotifyPropertyChanged
     {
         get => _coverState;
         set { if (_coverState == value) return; _coverState = value; Raise(); }
+    }
+
+    /// <summary>This display's effective overlay, shown only when per-display config is on.</summary>
+    private string _configSummary = string.Empty;
+    public string ConfigSummary
+    {
+        get => _configSummary;
+        set { if (_configSummary == value) return; _configSummary = value; Raise(); }
     }
 
     public bool IsManaged
@@ -79,7 +88,13 @@ public partial class ConfigWindow : Window
     private readonly ObservableCollection<DisplayRow> _rows = [];
     private readonly ObservableCollection<PowerRequester> _requesters = [];
 
+    private static readonly string Version =
+        $"v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?"}";
+
     private bool _loading = true;
+
+    /// <summary>Display whose config the overlay card edits; null = the shared config.</summary>
+    private string? _editTargetId;
 
     public ConfigWindow(App app)
     {
@@ -94,6 +109,8 @@ public partial class ConfigWindow : Window
         LoadIcon();
         LoadSettingsIntoUi();
         RebuildDisplayRows();
+        RebuildEditTargets();
+        LoadOverlayControls();
         RenderRequesters();
 
         _refresh = new DispatcherTimer(DispatcherPriority.Background)
@@ -135,7 +152,7 @@ public partial class ConfigWindow : Window
     {
         try
         {
-            var uri = new Uri("pack://application:,,,/Assets/MonitorDim.ico", UriKind.Absolute);
+            var uri = new Uri("pack://application:,,,/Assets/MonitorScreenSaver.ico", UriKind.Absolute);
             var decoder = new IconBitmapDecoder(uri, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
             TitleIcon.Source = decoder.Frames.OrderBy(f => f.PixelWidth).FirstOrDefault(f => f.PixelWidth >= 16)
                                ?? decoder.Frames[0];
@@ -155,13 +172,11 @@ public partial class ConfigWindow : Window
 
         TimeoutBox.Text = _settings.IdleTimeoutSeconds.ToString(CultureInfo.InvariantCulture);
 
-        ModeBlackRadio.IsChecked = _settings.Mode == OverlayMode.TrueBlack;
-        ModeDimRadio.IsChecked = _settings.Mode == OverlayMode.Dim;
-        DimSlider.Value = _settings.DimPercent;
-        UpdateOverlayModeUi();
+        PerDisplayToggle.IsChecked = _settings.PerMonitorConfig;
         ForegroundToggle.IsChecked = _settings.TrackForegroundChanges;
         RequestToggle.IsChecked = _settings.HonourDisplayRequests;
         FullscreenToggle.IsChecked = _settings.NeverBlankDuringFullscreen;
+        AudioToggle.IsChecked = _settings.NeverBlankDuringAudio;
 
         StartupToggle.IsChecked = AutoStart.IsEnabled;
         StartElevatedToggle.IsChecked = AutoStart.IsElevatedTask || _settings.StartElevated;
@@ -193,6 +208,113 @@ public partial class ConfigWindow : Window
     {
         _app.RefreshDisplays();
         NoDisplayHint.Visibility = _rows.Any(r => r.IsManaged) ? Visibility.Collapsed : Visibility.Visible;
+        RebuildEditTargets();
+        LoadOverlayControls();
+    }
+
+    // ------------------------------------------------------- overlay config target
+
+    /// <summary>The config the overlay card is currently showing. Read-only resolution.</summary>
+    private MonitorConfig ReadTarget() =>
+        _settings.PerMonitorConfig && _editTargetId is not null
+            ? _settings.ConfigFor(_editTargetId)
+            : _settings.GlobalConfig();
+
+    /// <summary>Mutates the edited config (override or shared), saves, and pushes to overlays.</summary>
+    private void MutateTarget(Action<MonitorConfig> mutate)
+    {
+        if (_settings.PerMonitorConfig && _editTargetId is not null)
+        {
+            mutate(_settings.OverrideFor(_editTargetId));
+        }
+        else
+        {
+            var g = _settings.GlobalConfig();
+            mutate(g);
+            _settings.ApplyGlobal(g);
+        }
+
+        _settings.Save();
+        _app.Overlays.ApplyAppearance();
+        UpdateOverlayModeUi();
+    }
+
+    /// <summary>One segment button per managed display, shown when per-display config is on.</summary>
+    private void RebuildEditTargets()
+    {
+        EditTargetPanel.Children.Clear();
+
+        var per = _settings.PerMonitorConfig;
+        var managed = _rows.Where(r => r.IsManaged).Select(r => r.Target).ToList();
+
+        EditTargetHost.Visibility = per && managed.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        EditTargetHint.Visibility = per && managed.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        if (!per || managed.Count == 0)
+        {
+            _editTargetId = null;
+            return;
+        }
+
+        if (_editTargetId is null || managed.All(t => t.StableId != _editTargetId))
+            _editTargetId = managed[0].StableId;
+
+        // Two identical monitors share a friendly name; disambiguate with the GDI name.
+        var dupes = managed.GroupBy(t => t.FriendlyName)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var t in managed)
+        {
+            var label = dupes.Contains(t.FriendlyName)
+                ? $"{t.FriendlyName} · {t.DeviceName.Replace(@"\\.\", "")}"
+                : t.FriendlyName;
+
+            var rb = new RadioButton
+            {
+                Style = (Style)FindResource("Segment"),
+                GroupName = "EditTarget",
+                Content = label,
+                Tag = t.StableId,
+                IsChecked = string.Equals(t.StableId, _editTargetId, StringComparison.OrdinalIgnoreCase),
+            };
+
+            rb.Click += OnEditTargetClicked;
+            EditTargetPanel.Children.Add(rb);
+        }
+    }
+
+    private void OnEditTargetClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not RadioButton rb || rb.Tag is not string id) return;
+
+        _editTargetId = id;
+        LoadOverlayControls();
+    }
+
+    /// <summary>Pushes the edited config into the overlay card's controls.</summary>
+    private void LoadOverlayControls()
+    {
+        var wasLoading = _loading;
+        _loading = true;
+
+        var cfg = ReadTarget();
+
+        ModeBlackRadio.IsChecked = cfg.Mode == OverlayMode.TrueBlack;
+        ModeDimRadio.IsChecked = cfg.Mode == OverlayMode.Dim;
+        ModeVideoRadio.IsChecked = cfg.Mode == OverlayMode.Video;
+
+        DimSlider.Value = cfg.DimPercent;
+
+        VideoPathBox.Text = cfg.VideoPath ?? "";
+        StretchFitRadio.IsChecked = cfg.VideoStretch == VideoStretch.Fit;
+        StretchFillRadio.IsChecked = cfg.VideoStretch == VideoStretch.Fill;
+        StretchStretchRadio.IsChecked = cfg.VideoStretch == VideoStretch.Stretch;
+
+        UpdateOverlayModeUi();
+
+        _loading = wasLoading;
     }
 
     // ------------------------------------------------------------------ render
@@ -217,7 +339,7 @@ public partial class ConfigWindow : Window
         else
         {
             StateText.Text = "Awake";
-            StateDot.Fill = (Brush)FindResource(s.Reason == AwakeReason.DisplayRequest ? "Warn" : "Ok");
+            StateDot.Fill = (Brush)FindResource(s.Reason is AwakeReason.DisplayRequest or AwakeReason.Audio ? "Warn" : "Ok");
             StateDetail.Text =
                 $"Held awake by {App.Describe(s.Reason)} · idle {App.Format(s.Idle)} · blanks in {App.Format(s.UntilBlank)}";
         }
@@ -227,7 +349,7 @@ public partial class ConfigWindow : Window
         RenderChips(s);
         RenderCoverStates();
 
-        FooterText.Text = $"v1.0.0 · engine tick {_settings.PollIntervalMs} ms · {_rows.Count(r => r.IsManaged)} of {_rows.Count} displays managed";
+        FooterText.Text = $"{Version} · engine tick {_settings.PollIntervalMs} ms · {_rows.Count(r => r.IsManaged)} of {_rows.Count} displays managed";
     }
 
     private void RenderChips(EngineStatus s)
@@ -239,6 +361,7 @@ public partial class ConfigWindow : Window
         AddChip("ES_SYSTEM_REQUIRED", s.Exec.SystemRequired ? "Warn" : "TextFaint");
 
         if (s.FullscreenActive) AddChip("fullscreen", "Warn");
+        if (s.AudioActive) AddChip("audio", "Warn");
 
         var displayState = _app.Events.WindowsDisplayState switch
         {
@@ -279,6 +402,7 @@ public partial class ConfigWindow : Window
     private void RenderCoverStates()
     {
         var covered = _app.Overlays.CoveredDisplayIds;
+        var per = _settings.PerMonitorConfig;
 
         foreach (var row in _rows)
         {
@@ -287,6 +411,10 @@ public partial class ConfigWindow : Window
                 : covered.Contains(row.Target.StableId)
                     ? "covered"
                     : "visible";
+
+            row.ConfigSummary = per && row.IsManaged
+                ? _settings.ConfigFor(row.Target.StableId).Summary
+                : "";
         }
     }
 
@@ -326,6 +454,8 @@ public partial class ConfigWindow : Window
     {
         _app.RefreshDisplays();
         RebuildDisplayRows();
+        RebuildEditTargets();
+        LoadOverlayControls();
     }
 
     private void OnPreset(object sender, RoutedEventArgs e)
@@ -350,40 +480,102 @@ public partial class ConfigWindow : Window
     private void UpdateTimeoutEcho() =>
         TimeoutEcho.Text = "= " + App.Format(TimeSpan.FromSeconds(_settings.IdleTimeoutSeconds));
 
+    private void OnPerDisplayChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+
+        _settings.PerMonitorConfig = PerDisplayToggle.IsChecked == true;
+        _settings.Save();
+
+        RebuildEditTargets();
+        LoadOverlayControls();
+        _app.Overlays.ApplyAppearance();
+    }
+
     private void OnOverlayModeChanged(object sender, RoutedEventArgs e)
     {
         if (_loading) return;
 
-        _settings.Mode = ModeDimRadio.IsChecked == true ? OverlayMode.Dim : OverlayMode.TrueBlack;
-        _settings.Save();
+        var mode = ModeVideoRadio.IsChecked == true ? OverlayMode.Video
+            : ModeDimRadio.IsChecked == true ? OverlayMode.Dim
+            : OverlayMode.TrueBlack;
 
-        UpdateOverlayModeUi();
-        _app.Overlays.ApplyAppearance();
+        MutateTarget(c => c.Mode = mode);
     }
 
     private void OnDimChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (_loading) return;
 
-        _settings.DimPercent = (int)Math.Round(e.NewValue);
-        _settings.Save();
+        MutateTarget(c => c.DimPercent = (int)Math.Round(e.NewValue));
+    }
 
-        UpdateOverlayModeUi();
-        _app.Overlays.ApplyAppearance();
+    private void OnStretchChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+
+        var stretch = StretchFillRadio.IsChecked == true ? VideoStretch.Fill
+            : StretchStretchRadio.IsChecked == true ? VideoStretch.Stretch
+            : VideoStretch.Fit;
+
+        MutateTarget(c => c.VideoStretch = stretch);
+    }
+
+    private void OnBrowseVideo(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Choose a screensaver video",
+            Filter = "Video files|*.mp4;*.m4v;*.mov;*.avi;*.wmv;*.mkv;*.webm;*.ts;*.m2ts|All files|*.*",
+            CheckFileExists = true,
+        };
+
+        var current = ReadTarget().VideoPath;
+        if (!string.IsNullOrWhiteSpace(current))
+        {
+            try { dialog.InitialDirectory = Path.GetDirectoryName(current); } catch { /* odd path */ }
+        }
+
+        if (dialog.ShowDialog(this) != true) return;
+
+        VideoPathBox.Text = dialog.FileName;
+        MutateTarget(c => c.VideoPath = dialog.FileName);
     }
 
     private void UpdateOverlayModeUi()
     {
-        var dim = _settings.Mode == OverlayMode.Dim;
+        var cfg = ReadTarget();
 
-        DimRow.Visibility = dim ? Visibility.Visible : Visibility.Collapsed;
-        DimWarning.Visibility = dim && _settings.DimPercent < 100 ? Visibility.Visible : Visibility.Collapsed;
+        DimRow.Visibility = cfg.Mode == OverlayMode.Dim ? Visibility.Visible : Visibility.Collapsed;
+        VideoPanel.Visibility = cfg.Mode == OverlayMode.Video ? Visibility.Visible : Visibility.Collapsed;
 
-        ModeHint.Text = dim
-            ? "The screen stays readable underneath, at reduced brightness."
-            : "Pixels emit nothing. Burn-in accrual stops completely.";
+        ModeHint.Text = cfg.Mode switch
+        {
+            OverlayMode.Dim => "The screen stays readable underneath, at reduced brightness.",
+            OverlayMode.Video => "A muted looping video instead of black — still fights burn-in, just less than true black.",
+            _ => "Pixels emit nothing. Burn-in accrual stops completely.",
+        };
 
-        DimEcho.Text = $"{_settings.DimPercent}%  ·  α {_settings.OverlayAlpha}";
+        DimEcho.Text = $"{cfg.DimPercent}%  ·  α {cfg.Alpha}";
+
+        switch (cfg.Mode)
+        {
+            case OverlayMode.Dim when cfg.DimPercent < 100:
+                DimWarning.Text = "Dim only slows burn-in. Anything below 100% still emits light.";
+                WarnBox.Visibility = Visibility.Visible;
+                break;
+
+            case OverlayMode.Video:
+                DimWarning.Text = cfg.VideoPath is null
+                    ? "No video chosen yet — this display will fall back to true black."
+                    : "A playing video keeps pixels lit. More motion (colour change) or a darker video means less burn-in.";
+                WarnBox.Visibility = Visibility.Visible;
+                break;
+
+            default:
+                WarnBox.Visibility = Visibility.Collapsed;
+                break;
+        }
     }
 
     private void OnPolicyChanged(object sender, RoutedEventArgs e)
@@ -393,6 +585,7 @@ public partial class ConfigWindow : Window
         _settings.TrackForegroundChanges = ForegroundToggle.IsChecked == true;
         _settings.HonourDisplayRequests = RequestToggle.IsChecked == true;
         _settings.NeverBlankDuringFullscreen = FullscreenToggle.IsChecked == true;
+        _settings.NeverBlankDuringAudio = AudioToggle.IsChecked == true;
         _settings.Save();
     }
 
