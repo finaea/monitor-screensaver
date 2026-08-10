@@ -130,6 +130,9 @@ public partial class App : System.Windows.Application
         _engine = new BlankingEngine(_settings);
         _engine.BlankStateChanged += OnBlankStateChanged;
         _engine.VideoOverlayVisible = () => _overlays.AnyVideoVisible;
+        // Keep the countdown in the open tray menu live. Text only — rebuilding the
+        // requester submenu items every tick would close it under the cursor.
+        _engine.StatusChanged += s => { if (_menu.Visible) RenderMenuStatus(s); };
         _engine.Start();
 
         // Best effort: carry the Run-key / scheduled-task entry over from the app's
@@ -250,8 +253,18 @@ public partial class App : System.Windows.Application
 
     private void UpdateMenu()
     {
-        var s = _engine.Status;
+        RenderMenuStatus(_engine.Status);
 
+        _startupItem.Checked = AutoStart.IsEnabled;
+
+        RebuildRequesterMenu();
+
+        _ = RefreshRequestersAsync();
+    }
+
+    /// <summary>The cheap text-only part of the menu, safe to rewrite every engine tick.</summary>
+    private void RenderMenuStatus(EngineStatus s)
+    {
         _headerItem.Text = s.Paused
             ? "MonitorScreenSaver — paused"
             : s.Blanked
@@ -259,12 +272,6 @@ public partial class App : System.Windows.Application
                 : $"MonitorScreenSaver — {Describe(s.Reason)}, blanks in {Format(s.UntilBlank)}";
 
         _pauseItem.Text = s.Paused ? "Resume blanking" : "Pause blanking";
-
-        _startupItem.Checked = AutoStart.IsEnabled;
-
-        RebuildRequesterMenu();
-
-        _ = RefreshRequestersAsync();
     }
 
     private void RebuildRequesterMenu()

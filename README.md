@@ -16,21 +16,14 @@ This app is built to allow OLED monitors to display black screen or screensaver 
 a powered-off monitor does not come back instantly. On DisplayPort the link drops entirely,
 so Windows sees an unplug: it re-detects your displays, re-trains the link, and shuffles every
 window around while you sit there waiting. Microsoft's own name for that is
-[Rapid Hot Plug Detect](https://devblogs.microsoft.com/directx/avoid-unexpected-app-rearrangement/).
+[Rapid Hot Plug Detect](https://devblogs.microsoft.com/directx/avoid-unexpected-app-rearrangement/). This app intends to address few pain points and make few quality of life changes.
 
-Essentially, MonitorScreenSaver puts a window over the monitors you pick, and nothing ever gets powered
-down — so there's no link drop, no window shuffle, and wake is instant in less than 500ms. It also fixes the
-other half of the problem: Windows' "turn off my screen after N minutes" is a single global
-switch, and [Microsoft confirms there is no per-monitor
-version](https://learn.microsoft.com/en-us/answers/questions/3952711/is-there-a-way-to-prevent-just-only-1-of-monitor-f).
-MonitorScreenSaver is per-monitor.
+- **Stops OLED from burning in** — Dim/Motion display reduces burn-in effect.
+- **Instantly bring the display up** — Less than 500ms to get the display back up 
+- **Only the monitors you choose.** — Select and configure each monitor individually (true black/dim/video)
+- **It follows Windows' own rules** — Plenty of configurations to decide what's considered an activity.
+- **Check what's holding the display** — Provides a way to check what software is holding the display and decide to ignore it or not.
 
-- **Stops OLED from burning in** — a black frame means the pixels emit nothing.
-- **Nothing gets powered off**, so no link drop, no window shuffle, and wake is instant.
-- **Only the monitors you choose.** Leave the one you're watching a movie on alone.
-- **It follows Windows' own rules** for what counts as "you're still using this", instead of
-  guessing. If Steam or Zoom or a video player is holding your screen awake, MonitorScreenSaver
-  notices and stays out of the way.
 
 <div align="center">
 <img src="config.png" alt="MonitorScreenSaver settings window" width="620">
@@ -75,13 +68,26 @@ Blanking clears the instant you touch the keyboard or mouse, or switch windows.
 > **Note:** set Windows' own *Turn off my screen after* (Settings → System → Power) to
 > something **longer than MonitorScreenSaver's idle timeout**, otherwise Windows powers your monitors
 > off first and the app never gets a chance. 30 minutes is a good backstop — prefer that over
-> `Never`, for the [lock screen](#the-lock-screen) reason below.
+> `Never`, as an insurance in case this app fails.
 
 ---
 
-## Who's holding the display awake
+## What's holding the display awake
 
-Any app can ask Windows to keep the screen on, and Windows honours it. MonitorScreenSaver reads the
+The app includes optional choices to set what counts as activity:
+
+| Option | What it does | Default |
+|---|---|---|
+| **Keyboard and mouse input** | Any keypress or mouse movement resets the idle timer. The baseline Windows signal. | Always on — can't be turned off |
+| **Window focus changes** | Switching windows counts as activity. Windows counts it too, but its input timer doesn't report it, so it's tracked separately. | On |
+| **Apps requesting the display stay on** | Honour any app asking Windows to keep the display on (video players, Parsec, Steam, OBS — see below). This is what makes blanking match Windows instead of guessing. | On |
+| **Never blank during exclusive fullscreen** | Don't blank while an exclusive-fullscreen app is up. Windows doesn't do this itself — it's here because an overlay on top of an exclusive-fullscreen game can misbehave. | On |
+| **Never blank while audio is playing** | Anything audible on any output device counts as activity; a muted stream doesn't. | Off — opt-in, so screens stay dark while music plays |
+
+The first three mirror what Windows itself considers activity; the last two go beyond it and
+are labelled that way in the settings window.
+
+Any app can ask Windows to keep the screen on via `ES_DISPLAY_REQUIRED` flag, and Windows honours it. MonitorScreenSaver reads the
 same request and honours it too, so it won't blank over your movie. Broadly, the things that
 do this are:
 
@@ -142,11 +148,9 @@ with Browse, then choose how it fills the screen:
 - **Stretch** — ignores the aspect ratio and distorts to fit
 
 Any resolution and aspect ratio works — the video is scaled to the monitor, portrait panels
-included. It plays whatever Windows Media Foundation can decode: if the built-in Movies & TV
-app opens the file, this can play it (MP4/H.264 always; HEVC and some MKV/WebM depend on the
-codecs installed on your machine).
+included. Support common media format such as MP4, M4V, MOV, WMV, AVI, HEVC, WEBM, MKV, TS etc. More on the Store codec extensions in [Microsoft's codec page](https://support.microsoft.com/en-us/windows/codecs-in-media-player-d5c2cdcd-83a2-4805-abb0-c6888138e456).
 
-Two honest caveats:
+Two caveats:
 
 - **A playing video protects less than true black.** It still helps — motion spreads the
   wear instead of parking your taskbar on the same pixels — but pixels stay lit and the GPU
@@ -157,15 +161,6 @@ Two honest caveats:
 - While a video screensaver is on screen, apps asking Windows to "keep the display on" are
   ignored — the video's own playback can file exactly that request, and honouring it would
   wake the screens we just covered. Touching the mouse or keyboard wakes them as always.
-
-### Optional extras
-
-- **Never blank during fullscreen games/video** — Windows doesn't do this, but an overlay on
-  top of an exclusive-fullscreen game can misbehave, so it's offered.
-- **Never blank while audio is playing** — off by default. Anything audible (any output
-  device) counts as activity, the way [oled_aegis](https://github.com/spenserlee/oled_aegis)
-  treats media. Leave it off if you like screens dark while music plays — that's why it's
-  opt-in. Detection reads the endpoint's peak meter, so a *muted* stream never counts.
 
 ---
 
@@ -223,10 +218,3 @@ Exit code 0 means everything passed. If you're filing an issue, attach that file
 How it decides what counts as activity, why the overlay is built the way it is, what was
 actually measured on the lock screen, and the traps found along the way:
 **[TECHNICAL.md](TECHNICAL.md)**.
-
-## Prior art
-
-[oled_aegis](https://github.com/spenserlee/oled_aegis) (per-monitor overlay + audio-session
-media detection) and [OLED-Sleeper](https://github.com/Quorthon13/OLED-Sleeper) (per-monitor
-picker, DDC/CI dimming) solve the same problem with input-idle heuristics only. Neither reads
-display power requests, which is the piece that makes this match Windows instead of guessing.
