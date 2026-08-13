@@ -179,6 +179,34 @@ public sealed class AppSettings
     /// </summary>
     public bool HonourDisplayRequests { get; set; } = true;
 
+    /// <summary>
+    /// Short names (parsec.exe) whose DISPLAY power requests are ignored. Attribution
+    /// comes from powercfg /requests, which needs elevation — without admin rights the
+    /// aggregate flag cannot be blamed on anyone, so the blacklist has no effect.
+    /// </summary>
+    public List<string> BlacklistedRequesters { get; set; } = [];
+
+    public bool IsBlacklisted(string shortName) =>
+        BlacklistedRequesters.Any(b => string.Equals(b, shortName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// True when attribution is available and every current DISPLAY holder is
+    /// blacklisted — i.e. the aggregate ES_DISPLAY_REQUIRED flag should be ignored.
+    /// </summary>
+    public bool BlacklistCovers(PowerRequestList.Snapshot snapshot)
+    {
+        if (BlacklistedRequesters.Count == 0 || !snapshot.Available) return false;
+
+        var any = false;
+        foreach (var r in snapshot.Display)
+        {
+            any = true;
+            if (!IsBlacklisted(r.ShortName)) return false;
+        }
+
+        return any;
+    }
+
     // ---- Beyond Windows (clearly-labelled extras) -----------------------------
 
     /// <summary>Windows does not do this by itself; it protects exclusive-fullscreen swapchains.</summary>
@@ -257,6 +285,12 @@ public sealed class AppSettings
         DimPercent = Math.Clamp(DimPercent, 5, 100);
         if (string.IsNullOrWhiteSpace(VideoPath)) VideoPath = null;
         ManagedDisplayIds = ManagedDisplayIds.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().ToList();
+
+        BlacklistedRequesters = BlacklistedRequesters
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         PerMonitor = PerMonitor
             .Where(kv => !string.IsNullOrWhiteSpace(kv.Key) && kv.Value is not null)

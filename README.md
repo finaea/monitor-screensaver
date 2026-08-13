@@ -22,7 +22,7 @@ window around while you sit there waiting. Microsoft's own name for that is
 - **Instantly bring the display up** — Less than 500ms to get the display back up 
 - **Only the monitors you choose.** — Select and configure each monitor individually (true black/dim/video)
 - **It follows Windows' own rules** — Plenty of configurations to decide what's considered an activity.
-- **Check what's holding the display** — Provides a way to check what software is holding the display and decide to ignore it or not.
+- **Check what's holding the display** — Provides a way to check what software is holding the display, and blacklist the ones to prevent them from holding the display.
 
 
 <div align="center">
@@ -106,8 +106,8 @@ Two places, both live:
 
 - **Settings window → HOLDING THE DISPLAY AWAKE** — a card listing each holder with a
   `PROCESS` / `SERVICE` / `DRIVER` tag and its stated reason. **Refresh** re-queries.
-- **Tray menu → Holding display awake** — same list as a submenu, with the count in the
-  label, e.g. `Holding display awake  (2)`.
+- **Tray menu → Holding display awake** — same list, showing on the menu
+  after right clicking the tray icon
 
 **Seeing the app names requires administrator rights.** That's a Windows restriction, not a
 choice here — the data comes from `powercfg /requests`, which is admin-only. What changes
@@ -118,6 +118,7 @@ without admin:
 | Blanking behaves correctly | ✅ | ✅ |
 | "Is *something* holding the display awake?" | ✅ yes/no | ✅ |
 | **Which app** is holding it | ❌ | ✅ named list |
+| **Blacklisting** a holder | ❌ kept but not applied | ✅ |
 
 The yes/no is all the blanking logic actually needs, so running as a standard user costs you
 nothing functionally — only the names. The chip next to the title reads `standard` or
@@ -137,6 +138,22 @@ You can also just check it yourself in an admin terminal, without the app:
 ```powershell
 powercfg /requests
 ```
+
+### Blacklisting a holder
+
+You can blacklist a selected process/app to prevent it to hold the display:
+
+- **Tray menu** — click a holder in the list to blacklist it.
+- **Settings window** — every holder row has a **Blacklist** button.
+
+A blacklisted app still shows in the holder list, just grayed out and tagged `blacklisted`,
+and a **Blacklisted** section appears underneath — click an entry there (or **Unblacklist**
+in the settings window) to undo it at any time.
+
+
+One catch: matching a request to an app name needs the same admin-only `powercfg /requests`
+data as the list itself, so **the blacklist only takes effect while running elevated**.
+Without admin your entries are kept (and editable) but can't be applied.
 
 ### Video screensaver
 

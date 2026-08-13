@@ -61,7 +61,8 @@ public partial class App : System.Windows.Application
     private Forms.ContextMenuStrip _menu = null!;
     private Forms.ToolStripMenuItem _headerItem = null!;
     private Forms.ToolStripMenuItem _pauseItem = null!;
-    private Forms.ToolStripMenuItem _requestersItem = null!;
+    private Forms.ToolStripMenuItem _requestersHeader = null!;
+    private Forms.ToolStripSeparator _requestersEnd = null!;
     private Forms.ToolStripMenuItem _startupItem = null!;
 
     private DispatcherTimer _watchdog = null!;
@@ -130,8 +131,9 @@ public partial class App : System.Windows.Application
         _engine = new BlankingEngine(_settings);
         _engine.BlankStateChanged += OnBlankStateChanged;
         _engine.VideoOverlayVisible = () => _overlays.AnyVideoVisible;
+        _engine.RequesterSnapshot = () => _requesters;
         // Keep the countdown in the open tray menu live. Text only — rebuilding the
-        // requester submenu items every tick would close it under the cursor.
+        // inline requester items every tick would shift them under the cursor.
         _engine.StatusChanged += s => { if (_menu.Visible) RenderMenuStatus(s); };
         _engine.Start();
 
@@ -171,11 +173,15 @@ public partial class App : System.Windows.Application
             BackColor = DarkColorTable.Surface,
             ForeColor = DarkColorTable.TextCol,
             ShowImageMargin = false,
+            ShowItemToolTips = true,
         };
 
         _headerItem = new Forms.ToolStripMenuItem("MonitorScreenSaver") { Enabled = false };
 
-        _requestersItem = new Forms.ToolStripMenuItem("Holding display awake");
+        // The requester list sits inline in the menu (no hover-submenu). Items are
+        // rebuilt on every open, between this header and its end separator.
+        _requestersHeader = new Forms.ToolStripMenuItem("Holding display awake") { Enabled = false };
+        _requestersEnd = new Forms.ToolStripSeparator();
 
         _pauseItem = new Forms.ToolStripMenuItem("Pause blanking", null, (_, _) => TogglePause());
 
@@ -193,8 +199,8 @@ public partial class App : System.Windows.Application
         [
             _headerItem,
             new Forms.ToolStripSeparator(),
-            _requestersItem,
-            new Forms.ToolStripSeparator(),
+            _requestersHeader,
+            _requestersEnd,
             blankNow,
             _pauseItem,
             new Forms.ToolStripSeparator(),
@@ -276,7 +282,32 @@ public partial class App : System.Windows.Application
 
     private void RebuildRequesterMenu()
     {
-        _requestersItem.DropDownItems.Clear();
+        // Clear the dynamic block between the section header and its end separator.
+        var start = _menu.Items.IndexOf(_requestersHeader) + 1;
+        while (!ReferenceEquals(_menu.Items[start], _requestersEnd))
+            _menu.Items.RemoveAt(start);
+
+        var insert = start;
+        void Add(Forms.ToolStripItem item) => _menu.Items.Insert(insert++, item);
+
+        void AddBlacklistSection()
+        {
+            if (_settings.BlacklistedRequesters.Count == 0) return;
+
+            Add(new Forms.ToolStripSeparator());
+            Add(new Forms.ToolStripMenuItem("Blacklisted — click to remove") { Enabled = false });
+
+            foreach (var name in _settings.BlacklistedRequesters)
+            {
+                var item = new Forms.ToolStripMenuItem($"      {name}")
+                {
+                    ToolTipText = $"Remove {name} from the blacklist",
+                };
+                var n = name;
+                item.Click += (_, _) => Unblacklist(n);
+                Add(item);
+            }
+        }
 
         var exec = _engine.Status.Exec;
 
@@ -284,53 +315,85 @@ public partial class App : System.Windows.Application
         {
             var reason = _requesters.Unavailable ?? "Unavailable.";
 
-            _requestersItem.DropDownItems.Add(new Forms.ToolStripMenuItem(
+            Add(new Forms.ToolStripMenuItem(
                 exec.DisplayRequired
-                    ? "Something IS holding the display awake"
-                    : "Nothing is holding the display awake")
+                    ? "      Something IS holding the display awake"
+                    : "      Nothing is holding the display awake")
             { Enabled = false });
 
-            _requestersItem.DropDownItems.Add(new Forms.ToolStripSeparator());
-            _requestersItem.DropDownItems.Add(new Forms.ToolStripMenuItem($"Names need admin — {reason}") { Enabled = false });
-            _requestersItem.DropDownItems.Add(new Forms.ToolStripMenuItem("Restart elevated to see names", null,
+            Add(new Forms.ToolStripMenuItem($"      Names need admin — {reason}") { Enabled = false });
+            Add(new Forms.ToolStripMenuItem("      Restart elevated to see names", null,
                 (_, _) => RelaunchElevated()));
 
-            _requestersItem.Text = exec.DisplayRequired
+            AddBlacklistSection();
+
+            _requestersHeader.Text = exec.DisplayRequired
                 ? "Holding display awake  ●"
                 : "Holding display awake";
             return;
         }
 
         var display = _requesters.Display.ToList();
+        var ignored = display.Count(r => _settings.IsBlacklisted(r.ShortName));
+        var active = display.Count - ignored;
 
         if (display.Count == 0)
         {
-            _requestersItem.DropDownItems.Add(new Forms.ToolStripMenuItem("None") { Enabled = false });
-            _requestersItem.Text = "Holding display awake";
-            return;
+            Add(new Forms.ToolStripMenuItem("      None") { Enabled = false });
         }
 
         foreach (var r in display)
         {
+            var isIgnored = _settings.IsBlacklisted(r.ShortName);
+
             var label = r.Reason is null
-                ? $"{r.ShortName}   [{r.Kind}]"
-                : $"{r.ShortName}   [{r.Kind}] — {r.Reason}";
+                ? $"      {r.ShortName}   [{r.Kind}]"
+                : $"      {r.ShortName}   [{r.Kind}] — {r.Reason}";
 
-            _requestersItem.DropDownItems.Add(new Forms.ToolStripMenuItem(label) { Enabled = false });
+            if (isIgnored) label += "   · blacklisted";
+
+            var item = new Forms.ToolStripMenuItem(label) { Enabled = !isIgnored };
+
+            if (!isIgnored)
+            {
+                var name = r.ShortName;
+                item.ToolTipText = $"Blacklist {name} — its requests will no longer keep the display awake";
+                item.Click += (_, _) => Blacklist(name);
+            }
+
+            Add(item);
         }
 
-        var others = _requesters.Requesters
-            .Where(r => !r.RequestType.Equals("DISPLAY", StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        AddBlacklistSection();
 
-        if (others.Count > 0)
+        _requestersHeader.Text = (active, ignored) switch
         {
-            _requestersItem.DropDownItems.Add(new Forms.ToolStripSeparator());
-            _requestersItem.DropDownItems.Add(new Forms.ToolStripMenuItem(
-                $"({others.Count} other non-display request(s))") { Enabled = false });
+            (0, 0) => "Holding display awake",
+            (_, 0) => $"Holding display awake  ({active})",
+            (0, _) => $"Holding display awake  ({ignored} blacklisted)",
+            _ => $"Holding display awake  ({active} · {ignored} blacklisted)",
+        };
+    }
+
+    /// <summary>Ignore this requester's DISPLAY requests from now on.</summary>
+    internal void Blacklist(string shortName)
+    {
+        if (!_settings.IsBlacklisted(shortName))
+        {
+            _settings.BlacklistedRequesters.Add(shortName);
+            _settings.Save();
         }
 
-        _requestersItem.Text = $"Holding display awake  ({display.Count})";
+        RequestersUpdated?.Invoke();
+    }
+
+    internal void Unblacklist(string shortName)
+    {
+        _settings.BlacklistedRequesters.RemoveAll(b =>
+            string.Equals(b, shortName, StringComparison.OrdinalIgnoreCase));
+        _settings.Save();
+
+        RequestersUpdated?.Invoke();
     }
 
     internal static string Describe(AwakeReason reason) => reason switch

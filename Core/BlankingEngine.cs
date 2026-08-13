@@ -88,6 +88,14 @@ public sealed class BlankingEngine : IDisposable
     /// </summary>
     public Func<bool>? VideoOverlayVisible { get; set; }
 
+    /// <summary>
+    /// Set by the app to expose the latest per-caller attribution snapshot. Used to
+    /// ignore ES_DISPLAY_REQUIRED when every current DISPLAY holder is blacklisted.
+    /// The snapshot degrades to unavailable without elevation, which disables the
+    /// blacklist rather than guessing.
+    /// </summary>
+    public Func<PowerRequestList.Snapshot>? RequesterSnapshot { get; set; }
+
     public event Action<EngineStatus>? StatusChanged;
 
     /// <summary>Raised when the blank/unblank decision flips.</summary>
@@ -209,7 +217,14 @@ public sealed class BlankingEngine : IDisposable
         // almost always come with input (Parsec connect, call starting) anyway.
         var suppressRequests = Status.Blanked && VideoOverlayVisible?.Invoke() == true;
 
-        if (_settings.HonourDisplayRequests && exec.DisplayRequired && !suppressRequests)
+        // A request whose only holders are blacklisted does not count. The snapshot
+        // refreshes every few seconds, so a holder change can be misjudged for at most
+        // that long before the next refresh corrects it.
+        var blacklisted = exec.DisplayRequired
+            && RequesterSnapshot?.Invoke() is { } snap
+            && _settings.BlacklistCovers(snap);
+
+        if (_settings.HonourDisplayRequests && exec.DisplayRequired && !blacklisted && !suppressRequests)
             _displayRequestTick = now;
         Consider(_displayRequestTick, AwakeReason.DisplayRequest);
 

@@ -80,13 +80,29 @@ public sealed class DisplayRow : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
+/// <summary>One row of the "holding the display awake" list, with its blacklist state.</summary>
+public sealed class RequesterRow
+{
+    public required PowerRequester Requester { get; init; }
+    public required bool IsBlacklisted { get; init; }
+
+    public string ShortName => Requester.ShortName;
+    public RequesterKind Kind => Requester.Kind;
+    public string? Reason => Requester.Reason;
+
+    public string ToggleLabel => IsBlacklisted ? "Unblacklist" : "Blacklist";
+    public double RowOpacity => IsBlacklisted ? 0.45 : 1.0;
+    public Visibility IgnoredVisibility => IsBlacklisted ? Visibility.Visible : Visibility.Collapsed;
+}
+
 public partial class ConfigWindow : Window
 {
     private readonly App _app;
     private readonly AppSettings _settings;
     private readonly DispatcherTimer _refresh;
     private readonly ObservableCollection<DisplayRow> _rows = [];
-    private readonly ObservableCollection<PowerRequester> _requesters = [];
+    private readonly ObservableCollection<RequesterRow> _requesters = [];
+    private readonly ObservableCollection<string> _blacklist = [];
 
     private static readonly string Version =
         $"v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?"}";
@@ -105,6 +121,7 @@ public partial class ConfigWindow : Window
 
         DisplayList.ItemsSource = _rows;
         RequesterList.ItemsSource = _requesters;
+        BlacklistList.ItemsSource = _blacklist;
 
         LoadIcon();
         LoadSettingsIntoUi();
@@ -357,7 +374,11 @@ public partial class ConfigWindow : Window
         ChipHost.Children.Clear();
 
         AddChip($"ES raw 0x{s.Exec.Raw:X2}", "TextMuted");
-        AddChip("ES_DISPLAY_REQUIRED", s.Exec.DisplayRequired ? "Warn" : "TextFaint");
+
+        var displayIgnored = s.Exec.DisplayRequired && _settings.BlacklistCovers(_app.Requesters);
+        AddChip(displayIgnored ? "ES_DISPLAY_REQUIRED (blacklisted)" : "ES_DISPLAY_REQUIRED",
+            s.Exec.DisplayRequired && !displayIgnored ? "Warn" : "TextFaint");
+
         AddChip("ES_SYSTEM_REQUIRED", s.Exec.SystemRequired ? "Warn" : "TextFaint");
 
         if (s.FullscreenActive) AddChip("fullscreen", "Warn");
@@ -427,6 +448,7 @@ public partial class ConfigWindow : Window
         ElevateBanner.Visibility = snapshot.Available ? Visibility.Collapsed : Visibility.Visible;
 
         _requesters.Clear();
+        RenderBlacklist();
 
         if (!snapshot.Available)
         {
@@ -438,10 +460,34 @@ public partial class ConfigWindow : Window
         }
 
         foreach (var r in snapshot.Display)
-            _requesters.Add(r);
+            _requesters.Add(new RequesterRow { Requester = r, IsBlacklisted = _settings.IsBlacklisted(r.ShortName) });
 
         RequesterEmpty.Text = "Nothing is holding the display awake.";
         RequesterEmpty.Visibility = _requesters.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void RenderBlacklist()
+    {
+        _blacklist.Clear();
+        foreach (var name in _settings.BlacklistedRequesters)
+            _blacklist.Add(name);
+
+        BlacklistPanel.Visibility = _blacklist.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnToggleBlacklist(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not RequesterRow row) return;
+
+        if (row.IsBlacklisted) _app.Unblacklist(row.ShortName);
+        else _app.Blacklist(row.ShortName);
+    }
+
+    private void OnUnblacklist(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not string name) return;
+
+        _app.Unblacklist(name);
     }
 
     // ------------------------------------------------------------------ handlers

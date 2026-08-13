@@ -303,7 +303,7 @@
                 <StackPanel>
                   <TextBlock Style="{StaticResource Body}" Text="Names require administrator rights" />
                   <TextBlock Style="{StaticResource Mono}" Margin="0,3,0,8"
-                             Text="Blanking works fine without it — only the per-app list needs elevation." />
+                             Text="Blanking works fine without it — only the per-app list and the blacklist need elevation." />
                   <Button Style="{StaticResource PrimaryButton}" Content="Restart elevated"
                           HorizontalAlignment="Left" Click="OnElevate" />
                 </StackPanel>
@@ -313,21 +313,60 @@
                 <ItemsControl.ItemTemplate>
                   <DataTemplate>
                     <Border Background="{StaticResource SurfaceAlt}" CornerRadius="7" Padding="11,8" Margin="0,0,0,6">
-                      <StackPanel>
-                        <StackPanel Orientation="Horizontal">
-                          <TextBlock Text="{Binding ShortName}" Style="{StaticResource Body}" FontWeight="SemiBold" />
-                          <Border Style="{StaticResource Chip}" Margin="8,0,0,0" Padding="6,1">
-                            <TextBlock Text="{Binding Kind}" Style="{StaticResource Mono}" FontSize="9" />
-                          </Border>
+                      <Grid>
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Opacity="{Binding RowOpacity}">
+                          <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding ShortName}" Style="{StaticResource Body}" FontWeight="SemiBold" />
+                            <Border Style="{StaticResource Chip}" Margin="8,0,0,0" Padding="6,1">
+                              <TextBlock Text="{Binding Kind}" Style="{StaticResource Mono}" FontSize="9" />
+                            </Border>
+                            <Border Style="{StaticResource Chip}" Margin="8,0,0,0" Padding="6,1"
+                                    Visibility="{Binding IgnoredVisibility}">
+                              <TextBlock Text="BLACKLISTED" Style="{StaticResource Mono}" FontSize="9"
+                                         Foreground="{StaticResource Warn}" />
+                            </Border>
+                          </StackPanel>
+                          <TextBlock Text="{Binding Reason}" Style="{StaticResource Mono}" Margin="0,3,0,0" />
                         </StackPanel>
-                        <TextBlock Text="{Binding Reason}" Style="{StaticResource Mono}" Margin="0,3,0,0" />
-                      </StackPanel>
+
+                        <Button Grid.Column="1" Style="{StaticResource GhostButton}" Content="{Binding ToggleLabel}"
+                                Padding="9,3" Margin="10,0,0,0" VerticalAlignment="Center"
+                                Click="OnToggleBlacklist" />
+                      </Grid>
                     </Border>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
 
               <TextBlock x:Name="RequesterEmpty" Style="{StaticResource Muted}" Text="Nothing." />
+
+              <StackPanel x:Name="BlacklistPanel" Margin="0,12,0,0" Visibility="Collapsed">
+                <TextBlock Style="{StaticResource H2}" Text="BLACKLISTED — REQUESTS IGNORED" />
+                <ItemsControl x:Name="BlacklistList">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border Background="{StaticResource SurfaceAlt}" CornerRadius="7" Padding="11,6" Margin="0,0,0,6">
+                        <Grid>
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                          </Grid.ColumnDefinitions>
+
+                          <TextBlock Grid.Column="0" Text="{Binding}" Style="{StaticResource Body}"
+                                     VerticalAlignment="Center" />
+                          <Button Grid.Column="1" Style="{StaticResource GhostButton}" Content="Unblacklist"
+                                  Padding="9,3" Click="OnUnblacklist" />
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
             </StackPanel>
           </Border>
 
