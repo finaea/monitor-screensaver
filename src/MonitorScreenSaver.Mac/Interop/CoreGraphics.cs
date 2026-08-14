@@ -64,4 +64,5 @@ internal static class CG
     // Exported CFStringRef constants for the window-info dictionary keys.
     internal static readonly IntPtr WindowLayerKey = CF.GetConstant(Lib, "kCGWindowLayer");
     internal static readonly IntPtr WindowBoundsKey = CF.GetConstant(Lib, "kCGWindowBounds");
+    internal static readonly IntPtr WindowOwnerPidKey = CF.GetConstant(Lib, "kCGWindowOwnerPID");
 }

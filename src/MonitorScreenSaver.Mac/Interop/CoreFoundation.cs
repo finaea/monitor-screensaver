@@ -107,7 +107,13 @@ internal static class CF
     internal static extern IntPtr CFRunLoopGetMain();
 
     [DllImport(Lib)]
+    internal static extern IntPtr CFRunLoopGetCurrent();
+
+    [DllImport(Lib)]
     internal static extern void CFRunLoopRun();
+
+    [DllImport(Lib)]
+    internal static extern void CFRunLoopStop(IntPtr runLoop);
 
     [DllImport(Lib)]
     internal static extern void CFRunLoopAddSource(IntPtr runLoop, IntPtr source, IntPtr mode);

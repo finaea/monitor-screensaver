@@ -34,6 +34,25 @@ Anything marked *(spike)* still needs a proof-of-concept before it counts as fac
   - Next: Phase 3 (overlay NSWindows + AVPlayerLooper video), then tray, then the
     Avalonia settings window.
 
+- **2026-08-14 — Phase 3 done** (committed through Phase 2; Phase 3 in working tree).
+  - `MacOverlayWindow`: borderless non-activating NSPanel at screensaver level,
+    canJoinAllSpaces + stationary + fullScreenAuxiliary. True black = opaque window;
+    dim = window alpha (black↔dim morphs in place — the WPF rebuild-on-translucency
+    machinery has no macOS counterpart, as predicted); video = AVPlayerLayer +
+    AVQueuePlayer + AVPlayerLooper, muted, `preventsDisplaySleepDuringVideoPlayback`
+    off. Only to/from-Video mode changes or a different file force a rebuild.
+  - Verified on this machine (3 displays, mixed offsets): `overlay black|dim|video`
+    each covered all displays with window-server-confirmed placement (the harness
+    reads back its own windows via CGWindowList and compares bounds — the mac twin of
+    the selftest's GetWindowRect check); video looped gaplessly across the clip end;
+    `engine 5` ran the real idle→countdown→blank→cover loop live.
+  - Wake-on-input rides the 250 ms idle poll (CGEventSource counts every input), so
+    the overlay never needs its own event handling or permissions.
+  - Known cosmetic gap: the cursor is not hidden over a blanked screen yet (Windows
+    sets Cursor=None; NSCursor hiding is app-wide — revisit in the tray-app phase).
+  - Next: Phase 4 (NSStatusItem menu bar tray + LSUIElement app bundle), then the
+    Avalonia settings window.
+
 ---
 
 ## TL;DR
