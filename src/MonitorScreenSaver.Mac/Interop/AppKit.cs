@@ -21,6 +21,7 @@ internal static class AppKit
     internal const nuint BehaviorFullScreenAuxiliary = 1 << 8;
 
     // NSApplicationActivationPolicy
+    internal const nint ActivationPolicyRegular = 0;
     internal const nint ActivationPolicyAccessory = 1;
 
     private static bool _appInitialised;
@@ -34,8 +35,35 @@ internal static class AppKit
         if (_appInitialised) return;
         _appInitialised = true;
 
+        SetActivationPolicy(ActivationPolicyAccessory);
+    }
+
+    /// <summary>
+    /// The process's Dock and menu bar presence. Accessory apps have neither, but their
+    /// windows still show, still take clicks, and can still be brought forward with
+    /// activateIgnoringOtherApps: — which is what makes a menu-bar-only settings window
+    /// possible at all.
+    /// https://developer.apple.com/documentation/appkit/nsapplication/activationpolicy
+    /// </summary>
+    internal static nint ActivationPolicy
+    {
+        get
+        {
+            var app = ObjC.Send(ObjC.Class("NSApplication"), ObjC.Sel("sharedApplication"));
+            return ObjC.SendNInt(app, ObjC.Sel("activationPolicy"));
+        }
+    }
+
+    /// <summary>
+    /// Can be called at any time, not just at launch: switching back to Accessory removes
+    /// the Dock icon of a running process. Avalonia's macOS backend sets Regular policy
+    /// when it initialises, so the settings window puts this app in the Dock unless
+    /// something puts it back (see MacUi.HideFromDock).
+    /// </summary>
+    internal static void SetActivationPolicy(nint policy)
+    {
         var app = ObjC.Send(ObjC.Class("NSApplication"), ObjC.Sel("sharedApplication"));
-        ObjC.SendVoid(app, ObjC.Sel("setActivationPolicy:"), ActivationPolicyAccessory);
+        ObjC.SendVoid(app, ObjC.Sel("setActivationPolicy:"), policy);
     }
 }
 

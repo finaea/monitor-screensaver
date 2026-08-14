@@ -222,6 +222,33 @@ Anything marked *(spike)* still needs a proof-of-concept before it counts as fac
   - Still manual, still open from Phase 1: the Windows `--selftest` (103 checks) has never
     been run on a real Windows machine.
 
+- **2026-08-14 — Post-Phase-6 fixes from the first real click-through.** Three things the
+  user hit that no automated check would have caught, because all three are about how the app
+  *presents itself* rather than what it does.
+  - **Menu bar glyph is now drawn, not resampled.** The status item was the app icon reduced to
+    18 pt, which as a template image (colours discarded, mask taken from the alpha channel) is a
+    grey smudge. `tools/make-mac-icons.swift` draws a monitor on a stand with `SS` on its screen
+    instead. The 8 pt letters set every other dimension: they have to survive the 1x rep, which
+    is what a non-Retina external display draws, and an `S` below ~8 px is a blob. Verified
+    against the live menu bar, both reps blown up nearest-neighbour.
+  - **The Dock icon no longer outlives the settings window.** Root cause: Avalonia's macOS
+    backend claims `NSApplicationActivationPolicyRegular` when it initialises, and nothing ever
+    set it back, so the first *Settings…* put the app in the Dock for the rest of the session.
+    `LSUIElement` cannot prevent this — it only decides the *initial* policy. Both transitions
+    are explicit now (`MacUi.ShowInDock` on show, `HideFromDock` on `Closed`), and the selftest
+    checks the round trip. Accessory-only was measured first and rejected: no Dock icon at any
+    point, but the window does not activate (`frontmost` stays false — it opens behind, and
+    unfocused). Found on the way: the menu bar said **"Avalonia Application"** while the window
+    was open, from `Application.Name`, whose default is that literal string and which
+    `CFBundleName` does not override; now set in `SettingsApp.Initialize`. Avalonia's own
+    hardcoded *About Avalonia* item is still there, one level down in that menu.
+  - **The Dock tile has a background.** The artwork is transparent, which among a row of opaque
+    tiles reads as a sticker floating on the wallpaper. The `.icns` is now the artwork
+    composited onto a near-black rounded tile — Apple's grid (824 of 1024 pt, ~185 pt corners),
+    ground `#0E0F14`, the settings window's own background — rendered per size rather than
+    resampled from one master. `tools/make-icns.sh` is now a thin `iconutil` wrapper over the
+    Swift renderer.
+
 ---
 
 ## TL;DR

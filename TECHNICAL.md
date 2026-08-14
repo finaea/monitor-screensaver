@@ -262,7 +262,7 @@ What each seam binds to:
 | Settings window | WPF | Avalonia, same tokens and layout |
 | Start at login | `Run` key / logon task | `SMAppService` (launchd) |
 
-Five things that cost real time, kept here so nobody re-derives them:
+Six things that cost real time, kept here so nobody re-derives them:
 
 - **The status item is not this app's window.** On macOS 26 `NSStatusItem` is rendered and
   owned by ControlCenter; the button's own `NSWindow` never gets a window-server device, so
@@ -280,6 +280,14 @@ Five things that cost real time, kept here so nobody re-derives them:
   input moves whole seconds.
 - **`proc_name` is denied for other users' processes**, so holder names fall back to
   `sysctl kinfo_proc.p_comm` — the same source `ps` uses.
+- **`LSUIElement` only decides the *initial* activation policy.** Avalonia's macOS backend
+  claims `NSApplicationActivationPolicyRegular` when it initialises, which is what lets the
+  settings window come to the front and take keystrokes — and which also put a Dock icon there
+  that outlived the window by the whole session, because nothing set the policy back. Both
+  halves are explicit now (`MacUi.ShowInDock` / `HideFromDock`, the second wired to the
+  window's `Closed`). Going accessory-only instead does remove the Dock icon while the window
+  is open, but then it does not activate: measured `frontmost` stays false, so the window opens
+  behind whatever is in front of it, unfocused.
 - **Avalonia is not WPF about layout.** `ScrollViewer.Padding` is subtracted when content is
   arranged but not when it is measured, and a vertical `StackPanel` arranges an over-desiring
   child at its desired width instead of clamping like WPF. Together those pushed a card past
@@ -308,7 +316,7 @@ Requires the .NET 9 SDK. The Windows head targets `net9.0-windows`, `win-x64`.
 ```bash
 dotnet build MonitorScreenSaver.sln   # all three projects (works on macOS too)
 tools/bundle-macos.sh [osx-x64]       # ./publish/MonitorScreenSaver.app
-tools/make-icns.sh                    # regenerate the .icns + menu bar art
+tools/make-icns.sh                    # regenerate the .icns + menu bar art (needs Xcode CLT)
 ```
 
 The mac head targets `net9.0`, `osx-arm64`/`osx-x64`, and its bundle is ad-hoc signed unless
@@ -347,18 +355,32 @@ Two csproj settings that are load-bearing, both commented in place:
 - **All resampling happens premultiplied.** Otherwise the transparent-black surround bleeds
   a dark halo into the white sticker outline.
 
-`tools/make-icns.sh` is the mac twin: it takes the same `Assets/icon.png` and writes
-`MonitorScreenSaver.icns` plus 18/36 px menu bar art into
-`src/MonitorScreenSaver.Mac/Assets`. Two notes:
+`tools/make-mac-icons.swift` draws the mac artwork and `tools/make-icns.sh` runs the one step
+that needs a command line tool (`iconutil`), writing `MonitorScreenSaver.icns`, `MenuBarIcon.png`
+and `MenuBarIcon@2x.png` into `src/MonitorScreenSaver.Mac/Assets`. Both outputs are committed,
+so a build never runs either script; regenerating needs Xcode Command Line Tools for
+`/usr/bin/swift`. The two pieces of art have nothing in common but the app they belong to:
 
+- **The app icon is `Assets/icon.png` composited onto a near-black rounded tile** (Apple's
+  grid: 824 of a 1024 pt canvas, ~185 pt corners, artwork at 70%), the background being the
+  same `#0E0F14` as the settings window. The artwork alone is transparent, which on the Dock
+  reads as a sticker floating over whatever is behind it, next to a row of opaque tiles.
+  Every size is rendered on its own rather than resampled from one master, so the corners stay
+  clean at 16 pt. The iconset stops at 256 px because the artwork does — a 512 entry would be
+  an upscale.
 - **`LSUIElement` suppresses the running Dock icon, not the bundle icon.** Without an `.icns`
   and `CFBundleIconFile`, macOS draws the generic placeholder on the Dock tile of a minimised
   settings window, in the app switcher and in Finder.
-- **The status item art is shipped in colour and marked `isTemplate`.** AppKit takes the mask
-  from the alpha channel and tints it for the current menu bar, so no separate monochrome
-  asset is needed — and the icon then follows light/dark automatically, which a colour image
-  would not. The iconset stops at 256 px because the artwork does (447 px master); everything
-  macOS draws except Finder at maximum zoom is covered without upscaling.
+- **The status item glyph is drawn from scratch** — a monitor on a stand with `SS` on its
+  screen — because a status item image is a *template*: AppKit discards the colours, takes the
+  mask from the alpha channel and tints it for the current menu bar, which is what makes it
+  follow light/dark and Reduce Transparency for free. Resampling an illustration to 18 pt
+  loses the shape and leaves the alpha as a grey smudge. The 8 pt letters are the binding
+  constraint on every other dimension: below that the `S` does not survive the 1x rep, which
+  is what a non-Retina external display draws.
+
+Changing an `.icns` in place does not always change what the Dock shows, since icon services
+cache by path. `killall Dock` settles it.
 
 ---
 
@@ -399,8 +421,9 @@ Exit code 0 = all passed.
 MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver selftest report.txt
 ```
 
-75 checks, same shape, same exit code. Section-for-section parity where the concept exists,
-and it takes a **real** display assertion with `IOPMAssertionCreateWithName` to prove
+Same shape, same exit code, ~65 checks on a single-display Mac (several sections run per
+display, so the count goes up with more attached). Section-for-section parity where the concept
+exists, and it takes a **real** display assertion with `IOPMAssertionCreateWithName` to prove
 detection, attribution and the blacklist decision end to end — the direct twin of the Windows
 `SetThreadExecutionState` check. Three sections have no Windows counterpart, and each exists
 because the thing it checks already broke once:
@@ -410,7 +433,8 @@ because the thing it checks already broke once:
   someone opens *Settings…*) and a Fluent theme resource overridden with the wrong CLR type,
   which throws only when the control that reads it is first realised. A `Slider` that is never
   shown is a `Slider` that is never tested, and Dim mode is not reachable without changing
-  settings.
+  settings. The same section checks the Dock-presence round trip, because opening the window
+  used to leave a Dock icon behind for the rest of the session.
 - **The status item**, through `NSStatusItem.isVisible` — never through our own window list,
   for the ControlCenter reason above.
 - **The private cursor property**, so a macOS release that revokes it shows up here rather
@@ -560,7 +584,8 @@ src/MonitorScreenSaver.Mac/             net9.0 — the AppKit head
   Assets/                     .icns + menu bar template art
 
 tools/make-icon.ps1           icon compositor (.ico + README png)
-tools/make-icns.sh            the mac twin (.icns + menu bar art)
+tools/make-mac-icons.swift    mac artwork: Dock tile + menu bar glyph
+tools/make-icns.sh            wraps it with iconutil to write the .icns
 tools/publish.ps1             single-file Windows release build
 tools/bundle-macos.sh         the .app bundle
 ```

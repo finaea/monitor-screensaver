@@ -99,11 +99,11 @@ banner, no "Restart elevated", no logon task, and the holder list simply always 
 
 | | |
 |---|---|
-| **Menu bar, not tray** | The menu is a real `NSMenu`, so it looks like a macOS menu rather than the custom-drawn Windows one. Same items in the same order, including the live countdown and the inline holder list. |
+| **Menu bar, not tray** | The menu is a real `NSMenu`, so it looks like a macOS menu rather than the custom-drawn Windows one. Same items in the same order, including the live countdown and the inline holder list. Its icon is a monitor with `SS` on the screen, drawn as a template image, so it follows light/dark and Reduce Transparency like every other menu bar extra. |
 | **Start at login** | Registered with launchd through `SMAppService`, and visible to you in System Settings → General → Login Items. Only works from inside the `.app` bundle, so move it somewhere permanent (e.g. `/Applications`) before switching it on — it registers the path it was launched from. |
 | **Video formats** | Plays what AVFoundation decodes: MP4/M4V/MOV/TS. **WMV, AVI, MKV and WebM do not work** — that is the one feature the Windows build has and this one doesn't. |
 | **Fonts** | No Segoe UI or Cascadia Mono on macOS, so the settings window uses San Francisco and SF Mono. Same sizes and layout, slightly different letterforms. |
-| **Minimising** | The settings window minimises to a Dock tile like any other window (click it to bring it back). The app itself still has no Dock icon. |
+| **The Dock** | Opening the settings window puts the app in the Dock, which is what lets the window come to the front and take keystrokes; closing it takes the app back out, still running in the menu bar. Minimising leaves a Dock tile like any other window — click it to bring the window back. |
 | **The cursor** | Hidden while the screens are blanked, because a lit arrow parked on a blanked OLED is the exact thing this app exists to prevent. That needs a private API — if a future macOS breaks it, blanking still works and the cursor just stays visible. |
 
 Set macOS's own display-sleep timer **longer** than the app's idle timeout
@@ -122,9 +122,10 @@ publish/MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver selftest report
 publish/MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver watch
 ```
 
-`selftest` runs 75 checks against your actual machine — displays, overlay placement against
+`selftest` runs ~65 checks against your actual machine — displays, overlay placement against
 the window server, power-assertion detection and attribution, the settings window's rendering
-stack, the menu bar item, the cursor path — and exits 0 when they all pass. `watch` logs every
+stack, the menu bar item, the cursor path — and exits 0 when they all pass. More displays mean
+more checks, since several sections run per display. `watch` logs every
 power, display-topology and lock transition with a heartbeat of everything the engine reads.
 
 ---
@@ -289,7 +290,7 @@ MonitorScreenSaver.exe --selftest report.txt          # Windows, 103 checks
 ```
 
 ```bash
-MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver selftest report.txt   # macOS, 75 checks
+MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver selftest report.txt   # macOS, ~65 checks
 ```
 
 Exit code 0 means everything passed. If you're filing an issue, attach that file.

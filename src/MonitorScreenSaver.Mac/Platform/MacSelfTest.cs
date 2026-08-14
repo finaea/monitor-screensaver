@@ -25,10 +25,17 @@ public static class MacSelfTest
     private static readonly StringBuilder Out = new();
     private static int _failures;
 
+    /// <summary>
+    /// Read before anything can perturb it, so the Dock-presence checks do not depend on
+    /// the order the sections run in.
+    /// </summary>
+    private static nint _policyAtRest;
+
     public static int Run(string? outputPath)
     {
         // Overlays, NSImage and Avalonia all need an NSApplication.
         AppKit.EnsureApplication();
+        _policyAtRest = AppKit.ActivationPolicy;
 
         Line($"MonitorScreenSaver self-test (macOS)  |  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         Line($"OS {Environment.OSVersion.Version}  |  {(Environment.Is64BitProcess ? "64-bit" : "32-bit")} " +
@@ -85,7 +92,7 @@ public static class MacSelfTest
     /// </summary>
     private static void SettingsWindowTheme()
     {
-        Section("Settings window: Avalonia stack and control themes");
+        Section("Settings window: Avalonia stack, control themes and Dock presence");
 
         try
         {
@@ -105,6 +112,22 @@ public static class MacSelfTest
             Check(probe.ToggleWidth > 0, $"pill toggle laid out ({probe.ToggleWidth:F0} px wide)");
             Check(probe.WrapsInsideParent,
                 $"wrapping label text stays inside its card ({probe.CardWidth:F0} px card, {probe.ContentWidth:F0} px content)");
+
+            // Dock presence, both directions. Opening Settings… used to leave a Dock icon
+            // behind for the rest of the session: Avalonia claims Regular policy when it
+            // initialises and nothing put it back. The transitions are what the settings
+            // window drives on show and on close, so they are what gets tested.
+            Check(_policyAtRest == AppKit.ActivationPolicyAccessory,
+                $"accessory at rest — no Dock icon, menu bar only ({Policy(_policyAtRest)})");
+            Line($"    ·   after Avalonia initialised, unasked: {Policy(probe.PolicyAfterInit)}");
+
+            UI.MacUi.ShowInDock();
+            Check(AppKit.ActivationPolicy == AppKit.ActivationPolicyRegular,
+                $"opening the window puts the app in the Dock, so it can take focus ({Policy(AppKit.ActivationPolicy)})");
+
+            UI.MacUi.HideFromDock();
+            Check(AppKit.ActivationPolicy == AppKit.ActivationPolicyAccessory,
+                $"closing it takes the app back out of the Dock ({Policy(AppKit.ActivationPolicy)})");
         }
         catch (Exception ex)
         {
@@ -655,6 +678,14 @@ public static class MacSelfTest
 
         return null;
     }
+
+    /// <summary>NSApplicationActivationPolicy, named. 2 is Prohibited (no windows at all).</summary>
+    private static string Policy(nint policy) => policy switch
+    {
+        AppKit.ActivationPolicyRegular => "Regular (in the Dock)",
+        AppKit.ActivationPolicyAccessory => "Accessory (menu bar only)",
+        _ => $"{policy}",
+    };
 
     /// <summary>True when running from inside an .app bundle (…/Contents/MacOS/).</summary>
     internal static bool IsBundled() =>

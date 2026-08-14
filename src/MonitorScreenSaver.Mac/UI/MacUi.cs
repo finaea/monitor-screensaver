@@ -29,10 +29,18 @@ internal static class MacUi
         {
             EnsureAvalonia();
 
+            // Before showing, not after: the window has to be able to come to the front
+            // and take keystrokes, and an accessory app cannot.
+            ShowInDock();
+
             if (_window is null)
             {
                 _window = new SettingsWindow(app);
-                _window.Closed += (_, _) => _window = null;
+                _window.Closed += (_, _) =>
+                {
+                    _window = null;
+                    HideFromDock();
+                };
                 _window.Show();
             }
             else
@@ -42,8 +50,8 @@ internal static class MacUi
 
             _window.Activate();
 
-            // An accessory (LSUIElement) app is not in the activation rotation, so its
-            // windows open behind whatever is frontmost unless we ask explicitly.
+            // A menu-bar app spends its life out of the activation rotation, so its windows
+            // open behind whatever is frontmost unless we ask explicitly.
             var nsApp = ObjC.Send(ObjC.Class("NSApplication"), ObjC.Sel("sharedApplication"));
             ObjC.SendVoid(nsApp, ObjC.Sel("activateIgnoringOtherApps:"), true);
         }
@@ -64,6 +72,34 @@ internal static class MacUi
             .SetupWithoutStarting();
     }
 
+    // ---------------------------------------------------------------- Dock presence
+    //
+    // The app is in the Dock while the settings window is open and gone from it once the
+    // window closes, which needs both halves stated explicitly.
+    //
+    // Avalonia's macOS backend claims Regular activation policy when it initialises. That
+    // is right for an app whose windows *are* the app, and half-right here: it is what
+    // lets the window come to the front and take keyboard focus, but it also left a Dock
+    // icon that outlived the window by the whole session, because nothing ever set the
+    // policy back. LSUIElement only decides the *initial* policy, so the plist cannot
+    // prevent that.
+    //
+    // Setting it by hand instead of relying on Avalonia's own call also covers reopening:
+    // Avalonia initialises once, so on the second Settings… nothing would ask for Regular
+    // policy again, and an accessory app does not come forward (measured: frontmost stays
+    // false — the window opens behind whatever is in front of it, unfocused).
+
+    /// <summary>Regular policy: Dock icon, app switcher entry, and able to take focus.</summary>
+    internal static void ShowInDock() => SetPolicy(AppKit.ActivationPolicyRegular);
+
+    /// <summary>Accessory policy: menu bar item only, no Dock icon. The resting state.</summary>
+    internal static void HideFromDock() => SetPolicy(AppKit.ActivationPolicyAccessory);
+
+    private static void SetPolicy(nint policy)
+    {
+        if (AppKit.ActivationPolicy != policy) AppKit.SetActivationPolicy(policy);
+    }
+
     /// <summary>What <see cref="BuildThemeProbe"/> measured. See its remarks.</summary>
     internal sealed record ThemeProbe(
         bool Realised,
@@ -72,6 +108,7 @@ internal static class MacUi
         double CardWidth,
         double ContentWidth,
         bool WrapsInsideParent,
+        nint PolicyAfterInit,
         IReadOnlyList<string> MissingBrushes);
 
     /// <summary>
@@ -88,6 +125,10 @@ internal static class MacUi
     internal static ThemeProbe BuildThemeProbe()
     {
         EnsureAvalonia();
+
+        // Read straight after setup, before anything asks for a policy: this is Avalonia
+        // helping itself to a Dock icon, which is the behaviour the Dock checks are about.
+        var policyAfterInit = AppKit.ActivationPolicy;
 
         var missing = new List<string>();
         foreach (var key in new[] { "Bg", "Surface", "SurfaceAlt", "SurfaceHot", "Border", "Text",
@@ -170,11 +211,16 @@ internal static class MacUi
                 ContentWidth: content.Bounds.Width,
                 // The card must not have been forced wider than the space it was given.
                 WrapsInsideParent: card.DesiredSize.Width <= card.Bounds.Width + 0.5,
+                PolicyAfterInit: policyAfterInit,
                 MissingBrushes: missing);
         }
         finally
         {
             try { window.Close(); } catch { /* teardown */ }
+
+            // The probe window is deliberately never activated, so leave the process the
+            // way it was found rather than with the Dock icon Avalonia's init asked for.
+            HideFromDock();
         }
     }
 }
