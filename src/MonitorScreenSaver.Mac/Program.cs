@@ -6,6 +6,7 @@ using MonitorScreenSaver.Mac.Interop;
 // the same role the Windows head's --selftest/--watch play. The tray app (NSStatusItem),
 // overlays and settings window arrive in later phases and will replace this Main.
 //
+//   tray               run the real app: menu bar item + engine + overlays (default)
 //   status [n]         poll idle/exec/holders/audio/fullscreen every second, n times (default 5)
 //   displays           enumerate displays with stable ids
 //   assertions         dump the holder list (compare with: pmset -g assertions)
@@ -16,10 +17,14 @@ using MonitorScreenSaver.Mac.Interop;
 //                      show a black|dim|video overlay on every display for [sec]
 //                      seconds (default 3), then tear down — the Phase 3 smoke test
 
-var command = args.Length > 0 ? args[0].ToLowerInvariant() : "status";
+var command = args.Length > 0 ? args[0].ToLowerInvariant() : "tray";
 
 switch (command)
 {
+    case "tray":
+        new MacApp().Run();
+        break;
+
     case "status":
         Status(args.Length > 1 && int.TryParse(args[1], out var n) ? n : 5);
         break;
@@ -155,7 +160,7 @@ static void Engine(int timeoutSeconds)
     {
         var line = s.Blanked
             ? "BLANKED"
-            : $"awake ({App.Describe(s.Reason)}) — idle {s.Idle.TotalSeconds:F0}s, blanks in {s.UntilBlank.TotalSeconds:F0}s" +
+            : $"awake ({MacApp.Describe(s.Reason)}) — idle {s.Idle.TotalSeconds:F0}s, blanks in {s.UntilBlank.TotalSeconds:F0}s" +
               (s.Exec.DisplayRequired ? "  [display held]" : "");
 
         if (line == lastLine) return;
@@ -255,17 +260,3 @@ internal static class Verify
     }
 }
 
-internal static class App
-{
-    internal static string Describe(AwakeReason reason) => reason switch
-    {
-        AwakeReason.UserInput => "input",
-        AwakeReason.ForegroundChange => "window focus",
-        AwakeReason.DisplayRequest => "app request",
-        AwakeReason.Fullscreen => "fullscreen",
-        AwakeReason.Audio => "audio",
-        AwakeReason.Resumed => "resumed",
-        AwakeReason.Paused => "paused",
-        _ => "idle",
-    };
-}

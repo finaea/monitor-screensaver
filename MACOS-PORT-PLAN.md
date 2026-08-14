@@ -53,6 +53,30 @@ Anything marked *(spike)* still needs a proof-of-concept before it counts as fac
   - Next: Phase 4 (NSStatusItem menu bar tray + LSUIElement app bundle), then the
     Avalonia settings window.
 
+- **2026-08-14 — Phase 4 done.** The mac head is now a working menu bar app.
+  - `MacApp` (the App.xaml.cs twin): settings load, engine + overlays + system events
+    wired, 3 s watchdog, requester cache, lock-file single instance, `[NSApp run]`.
+    First run seeds ManagedDisplayIds with every display until the settings window
+    exists (Phase 5); "Settings…" temporarily opens settings.json.
+  - `MacTray`: NSStatusItem + NSMenu mirroring the Windows menu item-for-item —
+    live-countdown header, inline "Holding display awake" list with click-to-blacklist
+    and a blacklisted section, Blank now, Pause, Settings…, Start at login
+    (SMAppService), Quit. Menu actions dispatch through a runtime-minted NSObject
+    subclass; no Windows elevation rows (attribution is always available).
+  - `tools/bundle-macos.sh` produces an ad-hoc-signed LSUIElement .app
+    (publish/MonitorScreenSaver.app, ~74 MB self-contained).
+  - **macOS 26 gotcha discovered:** status-item windows are rendered and owned by
+    ControlCenter, not the creating app — the app-side button window never gets a
+    window-server device, and CGWindowList on the app's pid shows nothing. Verified
+    the item exists by diffing ControlCenter's layer-25 window count (+1 per display's
+    menu bar while running). The future mac selftest must check it this way (or via
+    NSStatusItem.isVisible), never via the app's own window list.
+  - Remaining gate item (manual): click through the menu — countdown header, holder
+    blacklist round-trip, pause/resume, quit. Start-at-login needs the bundle in a
+    stable location (SMAppService registers the bundle path).
+  - Next: Phase 5 (Avalonia settings window), Phase 6 (mac selftest/watch parity,
+    icns + template menu bar icon, notarization decision, docs).
+
 ---
 
 ## TL;DR

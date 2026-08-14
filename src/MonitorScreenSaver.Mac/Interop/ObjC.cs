@@ -30,6 +30,22 @@ internal static class ObjC
     [DllImport(Lib)]
     internal static extern IntPtr sel_registerName(string name);
 
+    // ---------------------------------------------------------------- class creation
+    //
+    // Menu items need a target object whose action selector dispatches back into C#.
+    // These three calls mint a tiny NSObject subclass at runtime whose methods are
+    // UnmanagedCallersOnly function pointers.
+
+    [DllImport(Lib)]
+    internal static extern IntPtr objc_allocateClassPair(IntPtr superclass, string name, nint extraBytes);
+
+    [DllImport(Lib)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static extern bool class_addMethod(IntPtr cls, IntPtr selector, IntPtr imp, string typeEncoding);
+
+    [DllImport(Lib)]
+    internal static extern void objc_registerClassPair(IntPtr cls);
+
     // ---------------------------------------------------------------- autorelease pools
 
     [DllImport(Lib)]
@@ -49,6 +65,19 @@ internal static class ObjC
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     internal static extern IntPtr Send(IntPtr receiver, IntPtr selector, IntPtr arg1, IntPtr arg2);
 
+    /// <summary>initWithTitle:action:keyEquivalent:</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    internal static extern IntPtr Send(IntPtr receiver, IntPtr selector, IntPtr arg1, IntPtr arg2, IntPtr arg3);
+
+    /// <summary>statusItemWithLength: (CGFloat argument, object return).</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    internal static extern IntPtr SendForDouble(IntPtr receiver, IntPtr selector, double arg);
+
+    /// <summary>registerAndReturnError:-style calls taking an NSError**.</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static extern bool SendBoolRef(IntPtr receiver, IntPtr selector, ref IntPtr error);
+
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     internal static extern int SendInt(IntPtr receiver, IntPtr selector);
 
@@ -57,6 +86,10 @@ internal static class ObjC
 
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     internal static extern nint SendNInt(IntPtr receiver, IntPtr selector);
+
+    /// <summary>indexOfItem:-style calls (object argument, NSInteger return).</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    internal static extern nint SendNInt(IntPtr receiver, IntPtr selector, IntPtr arg);
 
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     [return: MarshalAs(UnmanagedType.I1)]
@@ -68,6 +101,10 @@ internal static class ObjC
     /// <summary>Also covers nint args (setLevel:, setCollectionBehavior:) — nint is IntPtr.</summary>
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     internal static extern void SendVoid(IntPtr receiver, IntPtr selector, IntPtr arg);
+
+    /// <summary>insertItem:atIndex:-style calls (object + NSInteger, void return).</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    internal static extern void SendVoid(IntPtr receiver, IntPtr selector, IntPtr arg1, IntPtr arg2);
 
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     internal static extern void SendVoid(IntPtr receiver, IntPtr selector, double arg);
