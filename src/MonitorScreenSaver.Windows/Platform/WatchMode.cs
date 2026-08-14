@@ -122,7 +122,7 @@ public static class WatchMode
 
     private static void Heartbeat()
     {
-        var exec = ExecutionState.Read();
+        var exec = WindowsExecutionSource.Read();
 
         var display = _sink.WindowsDisplayState switch
         {

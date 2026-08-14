@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <RuntimeIdentifiers>osx-arm64;osx-x64</RuntimeIdentifiers>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>MonitorScreenSaver.Mac</RootNamespace>
+    <AssemblyName>MonitorScreenSaverMac</AssemblyName>
+    <!-- Function pointers for CF/IOKit callbacks. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Same footprint trade as the Windows head: tray-app-all-day. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MonitorScreenSaver.Core\MonitorScreenSaver.Core.csproj" />
+  </ItemGroup>
+
+</Project>

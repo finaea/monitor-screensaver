@@ -1,20 +1,27 @@
 namespace MonitorScreenSaver.Core;
 
 /// <summary>
-/// Owns one <see cref="OverlayWindow"/> per managed display and keeps that set in sync
+/// Owns one <see cref="IOverlayWindow"/> per managed display and keeps that set in sync
 /// with the physical display topology (hotplug, resolution change, resume from sleep)
 /// and with each display's effective <see cref="MonitorConfig"/>.
 /// </summary>
 public sealed class OverlayManager : IDisposable
 {
     private readonly AppSettings _settings;
-    private readonly Dictionary<string, OverlayWindow> _windows = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IDisplayEnumerator _displayEnumerator;
+    private readonly IOverlayFactory _factory;
+    private readonly Dictionary<string, IOverlayWindow> _windows = new(StringComparer.OrdinalIgnoreCase);
 
     private IReadOnlyList<DisplayTarget> _displays = [];
     private bool _shown;
     private bool _disposed;
 
-    public OverlayManager(AppSettings settings) => _settings = settings;
+    public OverlayManager(AppSettings settings, IDisplayEnumerator displayEnumerator, IOverlayFactory factory)
+    {
+        _settings = settings;
+        _displayEnumerator = displayEnumerator;
+        _factory = factory;
+    }
 
     /// <summary>Raised when the user pokes an overlay (mouse/keys landing on a blanked screen).</summary>
     public event Action? WakeRequested;
@@ -38,7 +45,7 @@ public sealed class OverlayManager : IDisposable
     {
         if (_disposed) return;
 
-        _displays = DisplayEnumerator.Enumerate();
+        _displays = _displayEnumerator.Enumerate();
 
         var wanted = _displays
             .Where(d => _settings.ManagedDisplayIds.Contains(d.StableId))
@@ -56,11 +63,11 @@ public sealed class OverlayManager : IDisposable
         {
             if (_windows.TryGetValue(id, out var existing))
             {
-                if (existing.Tag is PixelRect r && r == target.Bounds) continue;
+                if (existing.BuiltBounds == target.Bounds) continue;
                 Destroy(id);
             }
 
-            var win = new OverlayWindow(target, _settings.ConfigFor(id)) { Tag = target.Bounds };
+            var win = _factory.Create(target, _settings.ConfigFor(id));
             win.WakeRequested += () => WakeRequested?.Invoke();
             _windows[id] = win;
 
@@ -81,8 +88,8 @@ public sealed class OverlayManager : IDisposable
 
     /// <summary>
     /// Pushes each display's current config to its live overlay. Windows that cannot
-    /// morph in place (mode change, opaque/translucent crossing, different video file)
-    /// are rebuilt individually — the others are left untouched.
+    /// morph in place (platform-dependent — e.g. a mode change or a different video
+    /// file) are rebuilt individually — the others are left untouched.
     /// </summary>
     public void ApplyAppearance()
     {
@@ -111,7 +118,7 @@ public sealed class OverlayManager : IDisposable
 
     /// <summary>
     /// Cheap periodic correction. Topology changes sometimes arrive without a
-    /// WM_DISPLAYCHANGE (notably after resume), and a topmost window can lose its
+    /// notification (notably after resume), and a topmost window can lose its
     /// z-order to another topmost app.
     /// </summary>
     public void Reassert()

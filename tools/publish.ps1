@@ -1,7 +1,7 @@
 ﻿# Produces a single self-contained MonitorScreenSaver.exe in .\publish
 $root = Split-Path $PSScriptRoot -Parent
 
-dotnet publish (Join-Path $root "MonitorScreenSaver.csproj") `
+dotnet publish (Join-Path $root "src\MonitorScreenSaver.Windows\MonitorScreenSaver.Windows.csproj") `
     -c Release `
     -r win-x64 `
     --self-contained true `

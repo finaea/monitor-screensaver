@@ -3,22 +3,7 @@ using System.Windows.Interop;
 
 namespace MonitorScreenSaver.Core;
 
-public enum SystemEventKind
-{
-    DisplayTopologyChanged,
-    ResumedFromSleep,
-    SuspendingToSleep,
-    SessionLocked,
-    SessionUnlocked,
-    WindowsDisplayOff,
-    WindowsDisplayOn,
-    WindowsDisplayDim,
-    ConsoleDisplayOff,
-    ConsoleDisplayOn,
-    ConsoleDisplayDim,
-    UserPresent,
-    UserInactive,
-}
+// SystemEventKind lives in MonitorScreenSaver.Core (SystemEvents.cs).
 
 /// <summary>
 /// A hidden message-only-ish window that subscribes to everything needed to keep the
@@ -29,7 +14,7 @@ public enum SystemEventKind
 ///   GUID_SESSION_USER_PRESENCE  — PowerUserInactive means "the user activity timeout
 ///                                 has elapsed with no interaction from the user".
 /// </summary>
-public sealed class SystemEventSink : IDisposable
+public sealed class SystemEventSink : ISystemEvents
 {
     private readonly HwndSource _source;
     private readonly List<IntPtr> _powerRegistrations = [];

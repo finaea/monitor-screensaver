@@ -193,7 +193,7 @@ public sealed class AppSettings
     /// True when attribution is available and every current DISPLAY holder is
     /// blacklisted — i.e. the aggregate ES_DISPLAY_REQUIRED flag should be ignored.
     /// </summary>
-    public bool BlacklistCovers(PowerRequestList.Snapshot snapshot)
+    public bool BlacklistCovers(PowerSnapshot snapshot)
     {
         if (BlacklistedRequesters.Count == 0 || !snapshot.Available) return false;
 

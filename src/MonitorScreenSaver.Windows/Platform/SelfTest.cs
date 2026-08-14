@@ -391,7 +391,7 @@ public static class SelfTest
     {
         Section("Category 2 — display power requests (SystemExecutionState)");
 
-        var before = ExecutionState.Read();
+        var before = WindowsExecutionSource.Read();
         Line($"    baseline raw=0x{before.Raw:X8}  display={before.DisplayRequired}  system={before.SystemRequired}");
 
         if (before.DisplayRequired)
@@ -458,7 +458,7 @@ public static class SelfTest
 
         for (var waited = 0; ; waited += step)
         {
-            if (ExecutionState.Read().DisplayRequired == expected) return (true, waited);
+            if (WindowsExecutionSource.Read().DisplayRequired == expected) return (true, waited);
             if (waited >= timeoutMs) return (false, waited);
             Thread.Sleep(step);
         }

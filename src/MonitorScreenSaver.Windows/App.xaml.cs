@@ -69,14 +69,14 @@ public partial class App : System.Windows.Application
     private ConfigWindow? _config;
 
     private bool _sessionLocked;
-    private PowerRequestList.Snapshot _requesters = new(false, null, []);
+    private PowerSnapshot _requesters = new(false, null, []);
     private DateTime _lastRequesterQuery = DateTime.MinValue;
 
     internal AppSettings Settings => _settings;
     internal BlankingEngine Engine => _engine;
     internal OverlayManager Overlays => _overlays;
     internal SystemEventSink Events => _events;
-    internal PowerRequestList.Snapshot Requesters => _requesters;
+    internal PowerSnapshot Requesters => _requesters;
 
     internal event Action? RequestersUpdated;
 
@@ -124,11 +124,11 @@ public partial class App : System.Windows.Application
 
         _settings = AppSettings.Load();
 
-        _overlays = new OverlayManager(_settings);
+        _overlays = new OverlayManager(_settings, new WindowsDisplays(), new WindowsOverlayFactory());
         _overlays.WakeRequested += OnWakeRequested;
         _overlays.Refresh();
 
-        _engine = new BlankingEngine(_settings);
+        _engine = new BlankingEngine(_settings, WindowsPlatform.CreateEnginePlatform());
         _engine.BlankStateChanged += OnBlankStateChanged;
         _engine.VideoOverlayVisible = () => _overlays.AnyVideoVisible;
         _engine.RequesterSnapshot = () => _requesters;

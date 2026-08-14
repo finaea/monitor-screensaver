@@ -6,7 +6,7 @@
 # merge at tray size.
 Add-Type -AssemblyName System.Drawing
 
-$outDir = Join-Path $PSScriptRoot "..\Assets"
+$outDir = Join-Path $PSScriptRoot "..\src\MonitorScreenSaver.Windows\Assets"
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 $icoPath = Join-Path $outDir "MonitorScreenSaver.ico"
 $pngPath = Join-Path $outDir "icon.png"

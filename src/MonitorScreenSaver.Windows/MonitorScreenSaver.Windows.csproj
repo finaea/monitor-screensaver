@@ -42,4 +42,8 @@
     <Resource Include="Assets\MonitorScreenSaver.ico" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\MonitorScreenSaver.Core\MonitorScreenSaver.Core.csproj" />
+  </ItemGroup>
+
 </Project>

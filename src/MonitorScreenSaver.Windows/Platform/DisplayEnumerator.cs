@@ -2,38 +2,12 @@
 
 namespace MonitorScreenSaver.Core;
 
-/// <summary>A rectangle in physical pixels. Public mirror of the internal RECT.</summary>
-public readonly record struct PixelRect(int Left, int Top, int Right, int Bottom)
-{
-    public int Width => Right - Left;
-    public int Height => Bottom - Top;
-
-    internal static PixelRect From(Native.RECT r) => new(r.Left, r.Top, r.Right, r.Bottom);
-}
-
-/// <summary>One physical display, in physical pixels.</summary>
-public sealed record DisplayTarget
-{
-    /// <summary>GDI name, e.g. <c>\\.\DISPLAY1</c>. Not stable across replug.</summary>
-    public required string DeviceName { get; init; }
-
-    /// <summary>Human name from DisplayConfig, e.g. "Predator X49V". Falls back to the generic PnP string.</summary>
-    public required string FriendlyName { get; init; }
-
-    /// <summary>Hardware id (e.g. <c>MONITOR\ACR0123\...</c>). Used as the settings key; survives replug.</summary>
-    public required string StableId { get; init; }
-
-    public required PixelRect Bounds { get; init; }
-    public required bool IsPrimary { get; init; }
-
-    public int Width => Bounds.Width;
-    public int Height => Bounds.Height;
-
-    public string Geometry => $"{Width} × {Height}  at  ({Bounds.Left}, {Bounds.Top})";
-}
+// PixelRect and DisplayTarget live in MonitorScreenSaver.Core (DisplayModels.cs).
 
 public static class DisplayEnumerator
 {
+    private static PixelRect ToPixelRect(Native.RECT r) => new(r.Left, r.Top, r.Right, r.Bottom);
+
     public static IReadOnlyList<DisplayTarget> Enumerate()
     {
         var friendly = TryGetFriendlyNames();
@@ -85,7 +59,7 @@ public static class DisplayEnumerator
                 DeviceName = device,
                 FriendlyName = name,
                 StableId = !string.IsNullOrWhiteSpace(hardwareId) ? hardwareId : device,
-                Bounds = PixelRect.From(info.rcMonitor),
+                Bounds = ToPixelRect(info.rcMonitor),
                 IsPrimary = (info.dwFlags & Native.MONITORINFOF_PRIMARY) != 0,
             });
         }

@@ -4,44 +4,9 @@ using System.Text.RegularExpressions;
 
 namespace MonitorScreenSaver.Core;
 
-public enum RequesterKind { Process, Service, Driver, Unknown }
-
-public sealed record PowerRequester(RequesterKind Kind, string Caller, string? Reason, string RequestType)
-{
-    /// <summary>Just the exe/service name, without the \Device\HarddiskVolumeN\... prefix.</summary>
-    public string ShortName
-    {
-        get
-        {
-            var c = Caller;
-            var slash = c.LastIndexOf('\\');
-            return slash >= 0 && slash < c.Length - 1 ? c[(slash + 1)..] : c;
-        }
-    }
-}
-
-/// <summary>Aggregate execution state — the part that works without elevation.</summary>
-public readonly record struct ExecutionState(bool DisplayRequired, bool SystemRequired, bool UserPresent, uint Raw)
-{
-    public static ExecutionState Read()
-    {
-        try
-        {
-            var status = Native.CallNtPowerInformation(Native.SystemExecutionState, IntPtr.Zero, 0, out var value, sizeof(uint));
-            if (status != 0) return new ExecutionState(false, false, false, 0);
-
-            return new ExecutionState(
-                (value & Native.ES_DISPLAY_REQUIRED) != 0,
-                (value & Native.ES_SYSTEM_REQUIRED) != 0,
-                (value & Native.ES_USER_PRESENT) != 0,
-                value);
-        }
-        catch
-        {
-            return new ExecutionState(false, false, false, 0);
-        }
-    }
-}
+// RequesterKind / PowerRequester / ExecutionState / PowerSnapshot live in
+// MonitorScreenSaver.Core (PowerModels.cs). The aggregate ExecutionState reader
+// lives in Platform/WindowsPlatform.cs (WindowsExecutionSource).
 
 /// <summary>
 /// Per-caller attribution via <c>powercfg /requests</c>. Requires elevation — the
@@ -74,16 +39,10 @@ public static class PowerRequestList
         }
     }
 
-    public sealed record Snapshot(bool Available, string? Unavailable, IReadOnlyList<PowerRequester> Requesters)
-    {
-        public IEnumerable<PowerRequester> Display =>
-            Requesters.Where(r => r.RequestType.Equals("DISPLAY", StringComparison.OrdinalIgnoreCase));
-    }
-
-    public static async Task<Snapshot> QueryAsync(CancellationToken token = default)
+    public static async Task<PowerSnapshot> QueryAsync(CancellationToken token = default)
     {
         if (!IsElevated)
-            return new Snapshot(false, "Requires administrator rights.", []);
+            return new PowerSnapshot(false, "Requires administrator rights.", []);
 
         try
         {
@@ -100,7 +59,7 @@ public static class PowerRequestList
 
             using var proc = Process.Start(psi);
             if (proc is null)
-                return new Snapshot(false, "Could not start powercfg.exe.", []);
+                return new PowerSnapshot(false, "Could not start powercfg.exe.", []);
 
             var stdout = await proc.StandardOutput.ReadToEndAsync(token).ConfigureAwait(false);
             var stderr = await proc.StandardError.ReadToEndAsync(token).ConfigureAwait(false);
@@ -109,9 +68,9 @@ public static class PowerRequestList
             var text = string.IsNullOrWhiteSpace(stdout) ? stderr : stdout;
 
             if (text.Contains("administrator", StringComparison.OrdinalIgnoreCase))
-                return new Snapshot(false, "Requires administrator rights.", []);
+                return new PowerSnapshot(false, "Requires administrator rights.", []);
 
-            return new Snapshot(true, null, Parse(text));
+            return new PowerSnapshot(true, null, Parse(text));
         }
         catch (OperationCanceledException)
         {
@@ -119,7 +78,7 @@ public static class PowerRequestList
         }
         catch (Exception ex)
         {
-            return new Snapshot(false, ex.Message, []);
+            return new PowerSnapshot(false, ex.Message, []);
         }
     }
 

@@ -22,7 +22,7 @@ namespace MonitorScreenSaver.Core;
 /// only), and tearing down a MediaElement with the window is both simpler and leak-proof
 /// compared to morphing in place.
 /// </summary>
-public sealed class OverlayWindow : Window
+public sealed class OverlayWindow : Window, IOverlayWindow
 {
     private readonly PixelRect _bounds;
     private MonitorConfig _cfg;
@@ -48,6 +48,9 @@ public sealed class OverlayWindow : Window
     public bool IsTranslucent { get; }
 
     public bool IsVideo => _cfg.Mode == OverlayMode.Video;
+
+    /// <summary>The display bounds this window was built for; a mismatch means rebuild.</summary>
+    public PixelRect BuiltBounds => _bounds;
 
     /// <summary>True when this overlay is visible with a live video element.</summary>
     public bool VideoPlaying => IsVideo && _media is not null && IsVisible;

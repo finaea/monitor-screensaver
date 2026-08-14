@@ -1,6 +1,3 @@
-﻿using System.Runtime.InteropServices;
-using System.Windows.Threading;
-
 namespace MonitorScreenSaver.Core;
 
 public enum AwakeReason
@@ -27,10 +24,11 @@ public sealed record EngineStatus(
     bool AudioActive);
 
 /// <summary>
-/// Reimplements the Windows display-idle decision so it can be applied to a subset of
-/// monitors instead of all of them.
+/// Reimplements the OS display-idle decision so it can be applied to a subset of
+/// monitors instead of all of them. The policy is Windows' (documented under
+/// SetThreadExecutionState); macOS' power-assertion model maps onto the same shape.
 ///
-/// Windows blanks when BOTH hold:
+/// The OS blanks when BOTH hold:
 ///   Category 1 — the idle timer expired. Per the SetThreadExecutionState docs the system
 ///                "automatically detects activities such as local keyboard or mouse input,
 ///                server activity, and changing window focus".
@@ -40,14 +38,15 @@ public sealed record EngineStatus(
 /// Because a held request continuously *resets* the timer, we model it the same way:
 /// while it is held we keep pushing the activity baseline forward, so releasing it starts
 /// a fresh full timeout rather than blanking instantly.
+///
+/// All OS access goes through <see cref="EnginePlatform"/>; this class is portable.
 /// </summary>
 public sealed class BlankingEngine : IDisposable
 {
     private readonly AppSettings _settings;
-    private readonly DispatcherTimer _timer;
-
-    private IntPtr _winEventHook = IntPtr.Zero;
-    private Native.WinEventProc? _winEventProc;   // must outlive the hook
+    private readonly EnginePlatform _os;
+    private readonly ITickTimer _timer;
+    private readonly IDisposable _foregroundWatch;
 
     private ulong _foregroundTick;
     private ulong _displayRequestTick;
@@ -61,20 +60,19 @@ public sealed class BlankingEngine : IDisposable
     private bool _paused;
     private bool _disposed;
 
-    public BlankingEngine(AppSettings settings)
+    public BlankingEngine(AppSettings settings, EnginePlatform os)
     {
         _settings = settings;
+        _os = os;
 
-        var now = Native.GetTickCount64();
+        var now = os.Clock.NowMs;
         _foregroundTick = _displayRequestTick = _fullscreenTick = _audioTick = _resumeTick = now;
 
-        _timer = new DispatcherTimer(DispatcherPriority.Background)
-        {
-            Interval = TimeSpan.FromMilliseconds(settings.PollIntervalMs),
-        };
-        _timer.Tick += (_, _) => Tick();
+        _timer = os.TimerFactory(TimeSpan.FromMilliseconds(settings.PollIntervalMs), Tick);
 
-        HookForeground();
+        // GetLastInputInfo-style input tracking does not report focus changes, but the
+        // OS counts them as activity, so they are watched separately.
+        _foregroundWatch = os.ForegroundWatchFactory(() => _foregroundTick = _os.Clock.NowMs);
     }
 
     public EngineStatus Status { get; private set; } =
@@ -90,11 +88,11 @@ public sealed class BlankingEngine : IDisposable
 
     /// <summary>
     /// Set by the app to expose the latest per-caller attribution snapshot. Used to
-    /// ignore ES_DISPLAY_REQUIRED when every current DISPLAY holder is blacklisted.
-    /// The snapshot degrades to unavailable without elevation, which disables the
-    /// blacklist rather than guessing.
+    /// ignore a held display request when every current DISPLAY holder is blacklisted.
+    /// The snapshot degrades to unavailable without attribution rights, which disables
+    /// the blacklist rather than guessing.
     /// </summary>
-    public Func<PowerRequestList.Snapshot>? RequesterSnapshot { get; set; }
+    public Func<PowerSnapshot>? RequesterSnapshot { get; set; }
 
     public event Action<EngineStatus>? StatusChanged;
 
@@ -120,7 +118,7 @@ public sealed class BlankingEngine : IDisposable
     /// <summary>Treat "right now" as activity — used on resume, unlock and display changes.</summary>
     public void NoteActivity()
     {
-        var now = Native.GetTickCount64();
+        var now = _os.Clock.NowMs;
         _foregroundTick = _displayRequestTick = _fullscreenTick = _audioTick = _resumeTick = now;
         _manualBlankAtInput = null;
     }
@@ -132,57 +130,8 @@ public sealed class BlankingEngine : IDisposable
     /// </summary>
     public void BlankNow()
     {
-        _manualBlankAtInput = LastInputTick();
+        _manualBlankAtInput = _os.Clock.LastInputMs;
         Tick();
-    }
-
-    // ------------------------------------------------------------------ category 1
-
-    /// <summary>
-    /// GetLastInputInfo returns a 32-bit tick that wraps every ~49.7 days. Subtracting in
-    /// unsigned 32-bit space handles the wrap, then we rebase onto the 64-bit clock.
-    /// </summary>
-    private static ulong LastInputTick()
-    {
-        var lii = new Native.LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<Native.LASTINPUTINFO>() };
-        var now = Native.GetTickCount64();
-
-        if (!Native.GetLastInputInfo(ref lii)) return now;
-
-        unchecked
-        {
-            var idleMs = (uint)Environment.TickCount - lii.dwTime;
-            return idleMs > now ? 0 : now - idleMs;
-        }
-    }
-
-    private void HookForeground()
-    {
-        // GetLastInputInfo does not report focus changes, but Windows counts them.
-        // Native invokes this, so nothing may escape it.
-        _winEventProc = (_, _, _, _, _, _, _) =>
-            CrashLog.GuardCallback("EVENT_SYSTEM_FOREGROUND", () => _foregroundTick = Native.GetTickCount64());
-
-        _winEventHook = Native.SetWinEventHook(
-            Native.EVENT_SYSTEM_FOREGROUND, Native.EVENT_SYSTEM_FOREGROUND,
-            IntPtr.Zero, _winEventProc, 0, 0,
-            Native.WINEVENT_OUTOFCONTEXT | Native.WINEVENT_SKIPOWNPROCESS);
-    }
-
-    // ------------------------------------------------------------------ extras
-
-    private static bool IsFullscreenActive()
-    {
-        try
-        {
-            if (Native.SHQueryUserNotificationState(out var state) != 0) return false;
-            return state is Native.QUERY_USER_NOTIFICATION_STATE.QUNS_RUNNING_D3D_FULL_SCREEN
-                          or Native.QUERY_USER_NOTIFICATION_STATE.QUNS_PRESENTATION_MODE;
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     // ------------------------------------------------------------------ the decision
@@ -191,11 +140,11 @@ public sealed class BlankingEngine : IDisposable
     {
         if (_disposed) return;
 
-        var now = Native.GetTickCount64();
-        var exec = ExecutionState.Read();
-        var fullscreen = _settings.NeverBlankDuringFullscreen && IsFullscreenActive();
+        var now = _os.Clock.NowMs;
+        var exec = _os.ExecutionState.Read();
+        var fullscreen = _settings.NeverBlankDuringFullscreen && _os.Fullscreen.IsFullscreenActive();
 
-        var inputTick = LastInputTick();
+        var inputTick = _os.Clock.LastInputMs;
         var baseline = inputTick;
         var reason = AwakeReason.UserInput;
 
@@ -212,9 +161,10 @@ public sealed class BlankingEngine : IDisposable
         // While our own video overlays are on screen, a DISPLAY request may be ours
         // (media pipelines file "Playing video" requests). Honouring it would unblank
         // the screens we just covered, so requests are ignored until real input or
-        // focus wakes us. Without admin rights requests cannot be attributed, so this
-        // deliberately also ignores foreign requests that start mid-blank — those
-        // almost always come with input (Parsec connect, call starting) anyway.
+        // focus wakes us. Without attribution rights requests cannot be blamed on
+        // anyone, so this deliberately also ignores foreign requests that start
+        // mid-blank — those almost always come with input (Parsec connect, call
+        // starting) anyway.
         var suppressRequests = Status.Blanked && VideoOverlayVisible?.Invoke() == true;
 
         // A request whose only holders are blacklisted does not count. The snapshot
@@ -235,7 +185,7 @@ public sealed class BlankingEngine : IDisposable
         // Audio only *prevents* blanking; it never unblanks. Someone starting music
         // after the screens went dark wants them to stay dark, so the tick is not
         // pushed while blanked — the frozen tick sits in the past and never wins.
-        var audio = _settings.NeverBlankDuringAudio && !Status.Blanked && AudioActivity.IsPlaying();
+        var audio = _settings.NeverBlankDuringAudio && !Status.Blanked && _os.Audio.IsPlaying();
         if (audio)
             _audioTick = now;
         Consider(_audioTick, AwakeReason.Audio);
@@ -270,13 +220,7 @@ public sealed class BlankingEngine : IDisposable
         _disposed = true;
 
         _timer.Stop();
-
-        if (_winEventHook != IntPtr.Zero)
-        {
-            Native.UnhookWinEvent(_winEventHook);
-            _winEventHook = IntPtr.Zero;
-        }
-
-        _winEventProc = null;
+        _timer.Dispose();
+        _foregroundWatch.Dispose();
     }
 }
