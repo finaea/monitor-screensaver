@@ -13,6 +13,18 @@ internal static class CG
         public double X, Y, Width, Height;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct CGPoint
+    {
+        public double X, Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct CGSize
+    {
+        public double Width, Height;
+    }
+
     // ---------------------------------------------------------------- input idle
 
     /// <summary>CGEventSourceStateID — HID system state covers all physical input.</summary>
@@ -47,6 +59,49 @@ internal static class CG
 
     [DllImport(Lib)]
     internal static extern int CGDisplayRemoveReconfigurationCallback(IntPtr callback, IntPtr userInfo);
+
+    // ---------------------------------------------------------------- cursor
+    //
+    // A lit cursor arrow parked on a blanked OLED is static bright pixels — the exact
+    // thing this app prevents. macOS only honours cursor changes from the active app,
+    // and the overlays are deliberately non-activating, so the supported routes
+    // (per-window cursor rects, NSCursor set, plain CGDisplayHideCursor) all verified
+    // no-ops from this process. The escape hatch is the private-but-ancient CGS
+    // connection property "SetsCursorInBackground" (games and remote-desktop tools
+    // use it), after which CGDisplayHideCursor works. Verified on macOS 26.6.
+    // Callers must treat failure as cosmetic: wrap in try/catch and carry on visible.
+
+    [DllImport(Lib)]
+    private static extern int _CGSDefaultConnection();
+
+    [DllImport(Lib)]
+    private static extern int CGSSetConnectionProperty(int cid, int targetCid, IntPtr key, IntPtr value);
+
+    [DllImport(Lib)]
+    internal static extern int CGDisplayHideCursor(uint display);
+
+    [DllImport(Lib)]
+    internal static extern int CGDisplayShowCursor(uint display);
+
+    private static bool _cursorInBackgroundEnabled;
+
+    /// <summary>Allows this (background) process's cursor hide/show calls to take effect. Once per process.</summary>
+    internal static void EnableCursorInBackground()
+    {
+        if (_cursorInBackgroundEnabled) return;
+        _cursorInBackgroundEnabled = true;
+
+        var cid = _CGSDefaultConnection();
+        var key = CF.CreateString("SetsCursorInBackground");
+        try
+        {
+            CGSSetConnectionProperty(cid, cid, key, CF.GetConstant(CF.Lib, "kCFBooleanTrue"));
+        }
+        finally
+        {
+            CF.CFRelease(key);
+        }
+    }
 
     // ---------------------------------------------------------------- window list
 

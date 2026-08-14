@@ -74,6 +74,26 @@ Anything marked *(spike)* still needs a proof-of-concept before it counts as fac
   - Remaining gate item (manual): click through the menu — countdown header, holder
     blacklist round-trip, pause/resume, quit. Start-at-login needs the bundle in a
     stable location (SMAppService registers the bundle path).
+
+- **2026-08-14 — two post-Phase-4 fixes** (found via live testing of the menu bar app).
+  - **Blank now did nothing.** Measured root cause: `MacActivityClock.LastInputMs` is
+    now − idle across two independently-rounding clocks, so consecutive reads wobble
+    ±1-2 ms with zero input; the engine's manual-blank hold compares consecutive
+    reads for equality and cancelled itself instantly. Fix: the clock absorbs jumps
+    under 100 ms and only moves forward past that (real input jumps whole seconds).
+    Core untouched; Windows unaffected (GetLastInputInfo returns a stored tick).
+  - **Cursor stayed visible over a blanked screen** — static bright pixels on OLED,
+    the exact thing the app prevents. All supported routes verified dead from a
+    non-activating app on macOS 26 (per-window cursorUpdate tracking: AppKit header
+    says ActiveAlways unsupported; transparent NSCursor set: no-op; plain
+    CGDisplayHideCursor: returns success, does nothing). Working fix: the private CGS
+    connection property `SetsCursorInBackground` + refcounted
+    CGDisplayHideCursor/ShowCursor on overlay show/hide — verified hidden during
+    blank and restored after, via screencapture. Private API: failure is caught and
+    degrades to a visible cursor (cosmetic), and the mac selftest should probe it.
+  - Field note: a user-run desktop-mascot app floats above the overlays (it uses a
+    high window level too) — overlay level arms races are out of scope; documented as
+    a known cohabitation quirk.
   - Next: Phase 5 (Avalonia settings window), Phase 6 (mac selftest/watch parity,
     icns + template menu bar icon, notarization decision, docs).
 

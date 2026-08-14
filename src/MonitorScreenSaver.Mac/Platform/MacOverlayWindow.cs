@@ -243,11 +243,31 @@ public sealed class MacOverlayWindow : IOverlayWindow
     {
         if (_window == IntPtr.Zero) return;
 
+        var wasVisible = _visible;
+
         ApplyBounds();
         ObjC.SendVoid(_window, ObjC.Sel("orderFrontRegardless"));
         _visible = true;
 
         if (_player != IntPtr.Zero) ObjC.SendVoid(_player, ObjC.Sel("play"));
+
+        // Hide the cursor — the Windows overlay's Cursor=None. Hide/show calls are
+        // refcounted per connection, so each window's balanced pair composes; only
+        // the hidden→visible transition may call it or ShowAll/Reassert would stack
+        // unbalanced hides. See CG.EnableCursorInBackground for why this needs the
+        // private CGS property (and why failure is treated as cosmetic).
+        if (!wasVisible)
+        {
+            try
+            {
+                CG.EnableCursorInBackground();
+                CG.CGDisplayHideCursor(CG.CGMainDisplayID());
+            }
+            catch (Exception ex)
+            {
+                CrashLog.Write("MacOverlayWindow.HideCursor", ex);
+            }
+        }
     }
 
     public void HideOverlay()
@@ -256,6 +276,18 @@ public sealed class MacOverlayWindow : IOverlayWindow
 
         // Pause, not just hide: an invisible window must not keep decoding.
         if (_player != IntPtr.Zero) ObjC.SendVoid(_player, ObjC.Sel("pause"));
+
+        if (_visible)
+        {
+            try
+            {
+                CG.CGDisplayShowCursor(CG.CGMainDisplayID());
+            }
+            catch (Exception ex)
+            {
+                CrashLog.Write("MacOverlayWindow.ShowCursor", ex);
+            }
+        }
 
         ObjC.SendVoid(_window, ObjC.Sel("orderOut:"), IntPtr.Zero);
         _visible = false;
@@ -275,6 +307,9 @@ public sealed class MacOverlayWindow : IOverlayWindow
     public void Close()
     {
         if (_window == IntPtr.Zero) return;
+
+        // Balances the cursor-hide refcount if we are being closed while visible.
+        HideOverlay();
 
         TearDownVideo();
 

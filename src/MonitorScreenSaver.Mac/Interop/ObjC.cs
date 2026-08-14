@@ -123,6 +123,14 @@ internal static class ObjC
     internal static extern IntPtr SendInitWindow(IntPtr receiver, IntPtr selector,
         CG.CGRect contentRect, nuint styleMask, nuint backing, [MarshalAs(UnmanagedType.I1)] bool defer);
 
+    /// <summary>initWithSize: (NSSize argument, object return).</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    internal static extern IntPtr Send(IntPtr receiver, IntPtr selector, CG.CGSize size);
+
+    /// <summary>initWithImage:hotSpot: (object + NSPoint, object return).</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    internal static extern IntPtr Send(IntPtr receiver, IntPtr selector, IntPtr arg, CG.CGPoint point);
+
     internal static IntPtr Class(string name) => objc_getClass(name);
     internal static IntPtr Sel(string name) => sel_registerName(name);
 

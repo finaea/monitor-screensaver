@@ -22,6 +22,21 @@ public static class MacPlatform
 /// </summary>
 public sealed class MacActivityClock : IActivityClock
 {
+    /// <summary>
+    /// Two reads with no input in between can differ by ±1-2 ms (measured): the value
+    /// is now − idle, subtracting across two clocks that round independently. The
+    /// engine's manual "Blank now" compares consecutive reads for "did input arrive
+    /// since?", so that wobble must be absorbed — only a jump past this threshold
+    /// counts as real input. Real input resets idle to ~0, jumping the value forward
+    /// by whole seconds, so wake latency is unaffected.
+    /// </summary>
+    private const ulong JitterMs = 100;
+
+    /// <summary>A backward jump too big to be jitter — a clock discontinuity; resync.</summary>
+    private const ulong ResyncMs = 10_000;
+
+    private ulong _lastInput;
+
     public ulong NowMs => (ulong)Environment.TickCount64;
 
     public ulong LastInputMs
@@ -35,7 +50,13 @@ public sealed class MacActivityClock : IActivityClock
             if (double.IsNaN(idleSeconds) || idleSeconds < 0) return now;
 
             var idleMs = (ulong)(idleSeconds * 1000.0);
-            return idleMs > now ? 0 : now - idleMs;
+            var candidate = idleMs > now ? 0 : now - idleMs;
+
+            var last = _lastInput;
+            if (candidate > last + JitterMs || last > candidate + ResyncMs)
+                _lastInput = last = candidate;
+
+            return last;
         }
     }
 }
