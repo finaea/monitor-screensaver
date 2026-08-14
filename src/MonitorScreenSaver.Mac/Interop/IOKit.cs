@@ -34,6 +34,18 @@ internal static class IOKit
     [DllImport(Lib)]
     internal static extern int IOPMCopyAssertionsByProcess(out IntPtr assertionsByPid);
 
+    // Taking an assertion is only used by the selftest, to prove the whole
+    // detect-and-attribute path end to end the way the Windows suite does with
+    // SetThreadExecutionState. kIOPMAssertionLevelOn = 255, Off = 0 (IOPMLib.h).
+    internal const uint AssertionLevelOn = 255;
+
+    [DllImport(Lib)]
+    internal static extern int IOPMAssertionCreateWithName(
+        IntPtr assertionType, uint assertionLevel, IntPtr assertionName, out uint assertionId);
+
+    [DllImport(Lib)]
+    internal static extern int IOPMAssertionRelease(uint assertionId);
+
     // ---------------------------------------------------------------- sleep / wake
 
     // IOMessage.h: iokit_common_msg(x) = 0xE0000000 | x  (verified against the SDK)
@@ -55,6 +67,10 @@ internal static class IOKit
     internal static extern int IOAllowPowerChange(uint rootPort, IntPtr notificationID);
 
     // ---------------------------------------------------------------- process names
+
+    /// <summary>Real user id. Reported by the selftest to make "no elevation needed" checkable.</summary>
+    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "getuid")]
+    internal static extern uint Getuid();
 
     [DllImport("/usr/lib/libSystem.B.dylib")]
     private static extern int proc_name(int pid, byte[] buffer, uint bufferSize);

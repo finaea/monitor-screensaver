@@ -2,15 +2,19 @@ using MonitorScreenSaver.Core;
 using MonitorScreenSaver.Mac;
 using MonitorScreenSaver.Mac.Interop;
 
-// Phase 2 harness: exercises every macOS platform service against the live machine,
-// the same role the Windows head's --selftest/--watch play. The tray app (NSStatusItem),
-// overlays and settings window arrive in later phases and will replace this Main.
+// Command line for the macOS head. "tray" is the real app; the rest are the diagnostics
+// that play the same role as the Windows head's --selftest/--watch, plus the per-service
+// harnesses the port was built against (they stay: each one isolates a single platform
+// service, which is how every macOS surprise in MACOS-PORT-PLAN.md was pinned down).
 //
 //   tray               run the real app: menu bar item + engine + overlays (default)
+//   settings           the real app, with the settings window opened at launch
+//   selftest [path]    run every detection path against this machine and report
 //   status [n]         poll idle/exec/holders/audio/fullscreen every second, n times (default 5)
 //   displays           enumerate displays with stable ids
 //   assertions         dump the holder list (compare with: pmset -g assertions)
-//   watch              log sleep/wake, topology and lock/unlock events until killed
+//   watch [path]       timestamped log of power/topology/session events + engine-input
+//                      heartbeat, to a file (default: <settings dir>/watch.log)
 //   engine [sec]       run the real Core BlankingEngine + overlays: an actual working
 //                      screensaver loop with a [sec] idle timeout (default 15)
 //   overlay <mode> [sec] [videoPath]
@@ -25,6 +29,13 @@ switch (command)
         new MacApp().Run();
         break;
 
+    case "settings":
+        new MacApp().Run(openSettings: true);
+        break;
+
+    case "selftest":
+        return MacSelfTest.Run(args.Length > 1 ? args[1] : null);
+
     case "status":
         Status(args.Length > 1 && int.TryParse(args[1], out var n) ? n : 5);
         break;
@@ -38,7 +49,7 @@ switch (command)
         break;
 
     case "watch":
-        Watch();
+        MacWatchMode.Start(args.Length > 1 ? args[1] : null);
         break;
 
     case "engine":
@@ -57,7 +68,9 @@ switch (command)
         break;
 
     default:
-        Console.WriteLine("usage: MonitorScreenSaverMac [status [n] | displays | assertions | watch | engine [timeoutSeconds] | overlay <black|dim|video> [seconds] [videoPath]]");
+        Console.WriteLine("usage: MonitorScreenSaverMac [tray | settings | selftest [path] | status [n] | displays |");
+        Console.WriteLine("                             assertions | watch [path] | engine [timeoutSeconds] |");
+        Console.WriteLine("                             overlay <black|dim|video> [seconds] [videoPath]]");
         return 1;
 }
 
@@ -111,17 +124,6 @@ static void Assertions()
 
     Console.WriteLine();
     Console.WriteLine($"DISPLAY holders: {snap.Display.Count()}   (compare with: pmset -g assertions)");
-}
-
-static void Watch()
-{
-    Console.WriteLine("Watching sleep/wake, display topology and lock/unlock. Ctrl+C to stop.");
-    Console.WriteLine("Try: lock the screen (Ctrl+Cmd+Q), unlock, change a display setting.");
-
-    using var events = new MacSystemEvents();
-    events.Event += kind => Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] EVENT  {kind}");
-
-    CF.CFRunLoopRun();
 }
 
 static void Engine(int timeoutSeconds)

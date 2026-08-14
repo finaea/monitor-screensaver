@@ -97,6 +97,131 @@ Anything marked *(spike)* still needs a proof-of-concept before it counts as fac
   - Next: Phase 5 (Avalonia settings window), Phase 6 (mac selftest/watch parity,
     icns + template menu bar icon, notarization decision, docs).
 
+- **2026-08-14 — Lunar cross-check (alin23/Lunar), for the record.** Lunar's primary
+  dimming path is not a window at all: it writes gamma tables
+  (`CGSetDisplayTransferByTable`) and drives hardware brightness, falling back to a
+  click-through `.hud`-level overlay only on displays where gamma is unsupported
+  (Sidecar/AirPlay/virtual — `GammaControl.swift:511-516`), with alpha capped at 0.85 so
+  it never reaches true black. "BlackOut" is display mirroring through the private
+  framework System Settings uses plus brightness/gamma zero, not an overlay. Nothing in
+  the repo hides or dims the cursor, and nothing there contradicts the finding below.
+  Gamma-zero is noted as a *possible future* TrueBlack backend (it would swallow the
+  cursor and any always-on-top app in one move) but it cannot serve Video mode, it is a
+  global resource that fights f.lux-style tools, and it is reset on display reconfig.
+- **2026-08-14 — "put the cursor below the overlay" is impossible on macOS 26**
+  (empirical). `CGWindowLevel.h` puts the cursor at `kCGMaximumWindowLevel − 1`, so a
+  window one level above it should cover it; a Swift test window at 2147483631 with a
+  verified-stationary cursor still rendered the cursor on top. Modern WindowServer
+  composites the cursor above all windows regardless of level, so the private
+  `SetsCursorInBackground` + `CGDisplayHideCursor` route already shipped stays the only
+  working approach (six now tested).
+
+- **2026-08-14 — Phase 5 done.** The settings window is real, and identical to the
+  Windows one card-for-card.
+  - **Lifetime:** Avalonia is set up with `SetupWithoutStarting()`, *not* a desktop
+    lifetime — AppKit keeps owning the loop (`[NSApp run]` in `MacApp.Run`) and
+    Avalonia's dispatcher rides the same main CFRunLoop. Verified live: the status item,
+    the engine timer and the Avalonia window all run under one loop. Avalonia is
+    initialised lazily on the first "Settings…", so sessions that never open settings
+    never pay for it.
+  - `UI/Theme.axaml` + `UI/SettingsWindow.axaml(.cs)` port `Theme.xaml` +
+    `ConfigWindow.xaml(.cs)`: same palette, sizes, seven cards and copy, custom 40 px
+    title bar (ExtendClientArea + NoChrome, so no traffic lights and our own
+    minimise/close, like Windows). Stock controls (TextBox, Slider, ScrollBar) keep
+    Fluent's templates recoloured through Fluent's own resource keys; only the pill
+    toggle, segmented radio and ghost/primary/caption buttons carry hand-written
+    templates, as on Windows.
+  - Mac-specific by design: no elevation banner and no "start elevated" toggle
+    (assertions need no admin), title chip reads "no admin needed", the status chips name
+    the IOKit assertion families instead of the ES_* flags plus the two Windows-only
+    signals, "Start at login" via SMAppService, AVFoundation wording and file-picker
+    patterns, and the holder list is polled off a content signature (no
+    RequestersUpdated event on the mac shell).
+  - Fonts are the one agreed visual deviation: no Segoe UI Variable / Cascadia Mono on
+    macOS, so UI text inherits San Francisco and monospace asks for SF Mono → Menlo.
+  - **Three real bugs the port surfaced, all fixed:**
+    - `ScrollViewer.Padding` is subtracted when Avalonia *arranges* content but not when
+      it *measures* it, so every card was measured 32 px wider than it was laid out;
+      wrapping text then desired more width than the card ever got, and Avalonia's
+      StackPanel arranges an over-desiring child at its desired width
+      (`StackPanel.ArrangeOverride`: `Math.Max(finalSize.Width, child.DesiredSize.Width)`)
+      instead of clamping like WPF — the startup card visibly spilled past the window
+      edge. The inset is now the content's `Margin`, which *is* honoured at measure.
+      `HorizontalScrollBarVisibility="Disabled"` is also explicit: Avalonia defaults it
+      to Auto (infinite measure width, nothing wraps) where WPF defaults to Disabled.
+    - Fluent consumes `SliderPre/PostContentMargin` as `RowDefinition.Height`, so
+      overriding them as `x:Double` threw `InvalidCastException` the first time a Slider
+      was realised — i.e. the moment anyone picked Dim mode. They are `GridLength` now,
+      and `TextControlSelectionHighlightColor` is a brush despite its name. Found with a
+      throwaway harness that loads the shipped `Theme.axaml`, because Dim mode is not
+      reachable without changing settings.
+    - `tools/bundle-macos.sh` copied only the single-file executable, but a single-file
+      publish does not embed native libraries: the bundle ran fine until someone opened
+      Settings…, then threw `DllNotFoundException: libSkiaSharp`. The script now
+      publishes into a clean directory (an incremental publish silently drops the loose
+      dylibs) and copies + signs libSkiaSharp / libHarfBuzzSharp / libAvaloniaNative
+      next to the executable. Bundle is 98 MB (was 80 MB).
+  - New dev command `MonitorScreenSaverMac settings` runs the real app shell with the
+    window already open — the macOS 26 tray menu is ControlCenter-owned and cannot be
+    driven from a script, so this is how the window gets exercised and screenshotted.
+  - Verified from the signed bundle: window opens with no errors, live engine status and
+    real display names, and the status item is still present (ControlCenter layer-25
+    windows 53 → 50 on quit = one menu bar per display).
+  - Gate status: every card reviewed against the Windows window via screenshots. Still
+    manual: driving the controls by hand (toggles, presets, Browse…, blacklist
+    round-trip, Start at login from a bundle in a stable location).
+  - Next: Phase 6 (mac selftest/watch parity, `.icns` + template menu bar icon,
+    notarization decision, README/TECHNICAL updates).
+
+- **2026-08-14 — Phase 6 done, except the one gate that needs a $99 certificate.**
+  - **Icons.** New `tools/make-icns.sh` (the twin of `make-icon.ps1`) builds
+    `MonitorScreenSaver.icns` plus 18/36 px menu bar art from the same `Assets/icon.png`,
+    into `src/MonitorScreenSaver.Mac/Assets` (committed, like the `.ico`). The bundle now
+    has a `Contents/Resources` and `CFBundleIconFile`; without them macOS drew the generic
+    placeholder on the Dock tile of a minimised settings window — `LSUIElement` suppresses
+    the *running* Dock icon, not the bundle icon. The status item now uses the app's own
+    artwork marked `isTemplate`, so AppKit takes the mask from its alpha channel and tints
+    it for the menu bar (no separate monochrome asset, and it follows light/dark); an
+    unbundled run still falls back to the SF Symbol. The iconset stops at 256 px because
+    the artwork does (447 px master) — everything macOS draws except Finder at maximum zoom.
+  - **`selftest`: 75 checks, all passing, exit 0**, verified both unbundled and from the
+    signed bundle, and on **osx-x64 under Rosetta** (75/75) as well as native arm64.
+    Section-for-section parity with the Windows 103-check suite where the concept exists; it
+    takes a real assertion via `IOPMAssertionCreateWithName` to prove detection, attribution
+    and the blacklist decision end to end. Three sections have no Windows counterpart, each
+    covering something that already broke once: the settings window's rendering stack
+    realised off-screen (catches both the missing-native-dylib and wrong-resource-type bugs
+    from Phase 5), the status item via `NSStatusItem.isVisible` (never our own window list),
+    and the private cursor property. Found while writing it: window-server registration is
+    async and the *first* panel is slowest, so the placement check polls — a fixed pump
+    passed on the built-in display and failed on both externals.
+  - **`watch [path]`** replaced the console-only event dump with the Windows shape: a file
+    log opening with `pmset -g custom` and the display list, then events plus a 10 s
+    heartbeat (idle, assertion flags, audio, fullscreen, frontmost, display holders). The
+    `displaysleep` line is the point — on this machine it is 10 min against our 5 min
+    timeout, so we win the race; shorter and macOS powers the panel off first.
+  - **Packaging.** `bundle-macos.sh` signs with `SIGN_IDENTITY` when set (hardened runtime +
+    the three entitlements CoreCLR needs to JIT under it: allow-jit,
+    allow-unsigned-executable-memory, disable-library-validation) and ad-hoc otherwise, then
+    `codesign --verify --deep --strict`. Deliberately **no universal binary**: `lipo` cannot
+    merge two single-file .NET executables (the payload is appended after the Mach-O image
+    and is silently dropped), and the Skia/HarfBuzz/AvaloniaNative dylibs we ship are already
+    universal. One arch per run; osx-x64 verified working under Rosetta. Also fixed: bash 3.2
+    (what macOS ships) errors on empty-array expansion under `set -u`.
+  - **Docs.** README gained a macOS section (menu bar vs tray, no-admin story, the
+    AVFoundation container gap, SF fonts, Dock-tile minimise, the cursor caveat, Gatekeeper
+    right-click-Open, both diagnostics) and per-platform error-log paths. TECHNICAL gained a
+    macOS section (the full seam table plus the five traps), mac build/icon/selftest/watch
+    subsections, and a rewritten Layout — every path in the old one was stale since the
+    Phase 1 split, as was the README's header image, which had been pointing at a moved file.
+  - **Open gate: notarization.** Needs an Apple Developer ID ($99/yr) that nobody has bought,
+    so "notarized build launches clean on a machine that never saw the dev environment"
+    cannot be closed. The signing path is written but **untested**, and the notarize/staple
+    commands are documented in the script header rather than run. Until then, another Mac
+    needs right-click → Open once.
+  - Still manual, still open from Phase 1: the Windows `--selftest` (103 checks) has never
+    been run on a real Windows machine.
+
 ---
 
 ## TL;DR

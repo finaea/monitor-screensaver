@@ -1,0 +1,384 @@
+<!--
+  The Avalonia twin of the Windows head's UI/ConfigWindow.xaml: same seven cards, same
+  order, same copy except where the mechanism is genuinely different on macOS (idle
+  source, assertion names, launchd autostart, AVFoundation decoding).
+
+  Two structural differences, both consequences of the platform:
+    * No elevation banner and no "start elevated" toggle. IOPMCopyAssertionsByProcess
+      needs no admin rights, so every requester feature works unprivileged.
+    * The window is custom-chromed (ExtendClientArea + NoChrome) so the title bar is the
+      same 40 px bar as on Windows, drawn by us.
+-->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="MonitorScreenSaver.Mac.UI.SettingsWindow"
+        Title="MonitorScreenSaver"
+        Width="680" Height="820" MinWidth="560" MinHeight="520"
+        Background="{StaticResource Bg}"
+        RequestedThemeVariant="Dark"
+        WindowStartupLocation="CenterScreen"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaChromeHints="NoChrome"
+        ExtendClientAreaTitleBarHeightHint="-1"
+        UseLayoutRounding="True">
+
+  <Border BorderBrush="{StaticResource Border}" BorderThickness="1">
+    <Grid RowDefinitions="40,*,Auto">
+
+      <!-- ===================== title bar ===================== -->
+      <Grid x:Name="TitleBar" Grid.Row="0" Background="{StaticResource Surface}"
+            ColumnDefinitions="Auto,*,Auto">
+
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="14,0,0,0" VerticalAlignment="Center">
+          <Image x:Name="TitleIcon" Width="16" Height="16" Margin="0,0,9,0"
+                 Source="avares://MonitorScreenSaverMac/Assets/icon.png" />
+          <TextBlock Text="MonitorScreenSaver" FontSize="12" FontWeight="SemiBold"
+                     Foreground="{StaticResource Text}" VerticalAlignment="Center" />
+          <Border Classes="chip" Margin="10,0,0,0" Padding="7,1">
+            <TextBlock x:Name="PrivilegeChip" Classes="mono" Text="no admin needed" />
+          </Border>
+        </StackPanel>
+
+        <StackPanel Grid.Column="2" Orientation="Horizontal">
+          <Button Classes="caption" Content="&#x2013;" Click="OnMinimise" ToolTip.Tip="Minimise" />
+          <Button Classes="caption close" Content="&#x2715;" Click="OnClose"
+                  ToolTip.Tip="Close to the menu bar" />
+        </StackPanel>
+      </Grid>
+
+      <!-- ===================== body ===================== -->
+      <!--
+        Two Avalonia-vs-WPF layout differences are load-bearing here, not cosmetic:
+
+        * HorizontalScrollBarVisibility="Disabled" — Avalonia defaults it to Auto, which
+          measures content with infinite width so nothing wraps. WPF defaults to Disabled,
+          which is why the Windows XAML never says so.
+        * The 18,16,14,8 inset is the StackPanel's Margin, not the ScrollViewer's Padding.
+          Avalonia's ScrollContentPresenter subtracts Padding when it *arranges* the
+          content but not when it *measures* it, so with Padding every card was measured
+          32 px wider than it was laid out. Wrapping text then desired more width than the
+          card ever got, and Avalonia's StackPanel arranges an over-desiring child at its
+          desired width (StackPanel.cs ArrangeOverride: Math.Max(finalSize.Width,
+          child.DesiredSize.Width)) instead of clamping like WPF — so the widest card
+          visibly spilled past the window edge. Margin is subtracted during measure.
+      -->
+      <ScrollViewer Grid.Row="1"
+                    VerticalScrollBarVisibility="Auto"
+                    HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="18,16,14,8">
+
+          <!-- status -->
+          <Border Classes="card">
+            <StackPanel>
+              <TextBlock Classes="h2" Text="STATUS" />
+
+              <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                <Ellipse x:Name="StateDot" Width="10" Height="10" Fill="{StaticResource Ok}"
+                         VerticalAlignment="Center" Margin="0,0,10,0" />
+                <TextBlock x:Name="StateText" Classes="h1" Text="Awake" />
+              </StackPanel>
+
+              <TextBlock x:Name="StateDetail" Classes="muted" Margin="20,0,0,12"
+                         Text="Waiting for the engine…" />
+
+              <WrapPanel x:Name="ChipHost" Margin="20,0,0,0" />
+            </StackPanel>
+          </Border>
+
+          <!-- displays -->
+          <Border Classes="card">
+            <StackPanel>
+              <Grid Margin="0,0,0,10">
+                <TextBlock Classes="h2" Text="DISPLAYS TO BLANK" Margin="0" />
+                <Button Classes="ghost" Content="Rescan" HorizontalAlignment="Right"
+                        Padding="9,3" Click="OnRescan" />
+              </Grid>
+
+              <ItemsControl x:Name="DisplayList">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border Background="{StaticResource SurfaceAlt}" BorderBrush="{StaticResource Border}"
+                            BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,8">
+                      <Grid ColumnDefinitions="Auto,*,Auto">
+
+                        <CheckBox Grid.Column="0" Classes="toggle"
+                                  IsChecked="{Binding IsManaged, Mode=TwoWay}"
+                                  VerticalAlignment="Center" Margin="0,0,12,0" />
+
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                          <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding FriendlyName}" Classes="body"
+                                       FontWeight="SemiBold" TextWrapping="NoWrap" />
+                            <Border Classes="chip" Margin="8,0,0,0" Padding="6,1"
+                                    IsVisible="{Binding IsPrimary}">
+                              <TextBlock Text="PRIMARY" Classes="mono" FontSize="9" />
+                            </Border>
+                          </StackPanel>
+                          <TextBlock Text="{Binding Detail}" Classes="mono" Margin="0,3,0,0" />
+                          <TextBlock Text="{Binding ConfigSummary}" Classes="mono" Margin="0,3,0,0"
+                                     Foreground="{StaticResource Accent}"
+                                     IsVisible="{Binding HasConfigSummary}" />
+                        </StackPanel>
+
+                        <TextBlock Grid.Column="2" Text="{Binding CoverState}" Classes="mono"
+                                   VerticalAlignment="Center" Foreground="{StaticResource TextFaint}" />
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <TextBlock x:Name="NoDisplayHint" Classes="muted" IsVisible="False"
+                         Text="No display selected — nothing will ever be blanked." />
+            </StackPanel>
+          </Border>
+
+          <!-- overlay appearance -->
+          <Border Classes="card">
+            <StackPanel>
+              <TextBlock Classes="h2" Text="OVERLAY" />
+
+              <StackPanel Margin="0,0,0,12">
+                <CheckBox x:Name="PerDisplayToggle" Classes="toggle" IsCheckedChanged="OnPerDisplayChanged">
+                  <StackPanel>
+                    <TextBlock Classes="body" Text="Configure each display individually" />
+                    <TextBlock Classes="mono" Text="Off: every display shares the look below. On: pick a display, then set its look." />
+                  </StackPanel>
+                </CheckBox>
+              </StackPanel>
+
+              <Border x:Name="EditTargetHost" Classes="segmentHost" Margin="0,0,0,12"
+                      HorizontalAlignment="Left" IsVisible="False">
+                <WrapPanel x:Name="EditTargetPanel" />
+              </Border>
+
+              <TextBlock x:Name="EditTargetHint" Classes="mono" Margin="0,0,0,12"
+                         Foreground="{StaticResource Warn}" IsVisible="False"
+                         Text="No display is managed yet — turn one on above first." />
+
+              <Border Classes="segmentHost" Margin="0,0,0,12">
+                <StackPanel Orientation="Horizontal">
+                  <RadioButton x:Name="ModeBlackRadio" Classes="segment"
+                               GroupName="OverlayMode" Content="True black" Click="OnOverlayModeChanged" />
+                  <RadioButton x:Name="ModeDimRadio" Classes="segment"
+                               GroupName="OverlayMode" Content="Dim" Click="OnOverlayModeChanged" />
+                  <RadioButton x:Name="ModeVideoRadio" Classes="segment"
+                               GroupName="OverlayMode" Content="Video" Click="OnOverlayModeChanged" />
+                </StackPanel>
+              </Border>
+
+              <TextBlock x:Name="ModeHint" Classes="mono" Margin="0,0,0,12"
+                         Text="Pixels emit nothing. Burn-in accrual stops completely." />
+
+              <Grid x:Name="DimRow" ColumnDefinitions="*,Auto">
+                <Slider x:Name="DimSlider" Grid.Column="0" Minimum="5" Maximum="100"
+                        ValueChanged="OnDimChanged" />
+
+                <TextBlock x:Name="DimEcho" Grid.Column="1" Classes="body"
+                           VerticalAlignment="Center" Margin="14,0,0,0" MinWidth="86" />
+              </Grid>
+
+              <StackPanel x:Name="VideoPanel" IsVisible="False">
+                <Grid Margin="0,0,0,10" ColumnDefinitions="*,Auto">
+                  <TextBox x:Name="VideoPathBox" Classes="field" Grid.Column="0"
+                           IsReadOnly="True" VerticalAlignment="Center" />
+                  <Button Classes="ghost" Grid.Column="1" Content="Browse…"
+                          Margin="8,0,0,0" Click="OnBrowseVideo" />
+                </Grid>
+
+                <Border Classes="segmentHost" Margin="0,0,0,10" HorizontalAlignment="Left">
+                  <StackPanel Orientation="Horizontal">
+                    <RadioButton x:Name="StretchFitRadio" Classes="segment"
+                                 GroupName="VideoStretch" Content="Fit" Click="OnStretchChanged" />
+                    <RadioButton x:Name="StretchFillRadio" Classes="segment"
+                                 GroupName="VideoStretch" Content="Fill" Click="OnStretchChanged" />
+                    <RadioButton x:Name="StretchStretchRadio" Classes="segment"
+                                 GroupName="VideoStretch" Content="Stretch" Click="OnStretchChanged" />
+                  </StackPanel>
+                </Border>
+
+                <TextBlock Classes="mono"
+                           Text="Fit keeps aspect with black bars · Fill crops to cover · Stretch distorts. Any ratio and resolution is scaled to the screen, always muted. Plays whatever AVFoundation can decode — if QuickTime Player opens it, this can." />
+              </StackPanel>
+
+              <Border x:Name="WarnBox" Classes="inset" CornerRadius="8" Padding="11,8" Margin="0,10,0,0">
+                <TextBlock x:Name="DimWarning" Classes="mono" Foreground="{StaticResource Warn}"
+                           Text="Dim only slows burn-in. Anything below 100% still emits light." />
+              </Border>
+            </StackPanel>
+          </Border>
+
+          <!-- timing -->
+          <Border Classes="card">
+            <StackPanel>
+              <TextBlock Classes="h2" Text="IDLE TIMEOUT" />
+
+              <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                <Button Classes="ghost" Content="1 min" Tag="60" Click="OnPreset" Margin="0,0,6,0" />
+                <Button Classes="ghost" Content="3 min" Tag="180" Click="OnPreset" Margin="0,0,6,0" />
+                <Button Classes="ghost" Content="5 min" Tag="300" Click="OnPreset" Margin="0,0,6,0" />
+                <Button Classes="ghost" Content="10 min" Tag="600" Click="OnPreset" Margin="0,0,6,0" />
+                <Button Classes="ghost" Content="30 min" Tag="1800" Click="OnPreset" />
+              </StackPanel>
+
+              <StackPanel Orientation="Horizontal">
+                <TextBox x:Name="TimeoutBox" Classes="field" Width="86"
+                         TextChanged="OnTimeoutChanged" />
+                <TextBlock Text="seconds" Classes="muted" VerticalAlignment="Center" Margin="10,0,0,0" />
+                <TextBlock x:Name="TimeoutEcho" Classes="mono" VerticalAlignment="Center" Margin="14,0,0,0" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <!-- policy -->
+          <Border Classes="card">
+            <StackPanel>
+              <TextBlock Classes="h2" Text="WHAT COUNTS AS ACTIVITY" />
+
+              <StackPanel Margin="0,0,0,14">
+                <CheckBox Classes="toggle" IsEnabled="False" IsChecked="True">
+                  <StackPanel>
+                    <TextBlock Classes="body" Text="Keyboard and mouse input" />
+                    <TextBlock Classes="mono" Text="Category 1 · CGEventSource HID idle · always on" />
+                  </StackPanel>
+                </CheckBox>
+              </StackPanel>
+
+              <StackPanel Margin="0,0,0,14">
+                <CheckBox x:Name="ForegroundToggle" Classes="toggle" IsCheckedChanged="OnPolicyChanged">
+                  <StackPanel>
+                    <TextBlock Classes="body" Text="App switches" />
+                    <TextBlock Classes="mono" Text="Category 1 · the HID idle timer alone does not see them" />
+                  </StackPanel>
+                </CheckBox>
+              </StackPanel>
+
+              <StackPanel Margin="0,0,0,14">
+                <CheckBox x:Name="RequestToggle" Classes="toggle" IsCheckedChanged="OnPolicyChanged">
+                  <StackPanel>
+                    <TextBlock Classes="body" Text="Apps requesting the display stay on" />
+                    <TextBlock Classes="mono" Text="Category 2 · PreventUserIdleDisplaySleep · video players, calls, caffeinate" />
+                  </StackPanel>
+                </CheckBox>
+              </StackPanel>
+
+              <Border Classes="inset">
+                <StackPanel>
+                  <TextBlock Classes="h2" Text="BEYOND SYSTEM BEHAVIOUR" Margin="0,0,0,8" />
+                  <CheckBox x:Name="FullscreenToggle" Classes="toggle" IsCheckedChanged="OnPolicyChanged"
+                            Margin="0,0,0,12">
+                    <StackPanel>
+                      <TextBlock Classes="body" Text="Never blank during fullscreen" />
+                      <TextBlock Classes="mono" Text="macOS does not do this — protects fullscreen games from the overlay" />
+                    </StackPanel>
+                  </CheckBox>
+                  <CheckBox x:Name="AudioToggle" Classes="toggle" IsCheckedChanged="OnPolicyChanged">
+                    <StackPanel>
+                      <TextBlock Classes="body" Text="Never blank while audio is playing" />
+                      <TextBlock Classes="mono" Text="Anything audible counts as activity. Leave off if you want screens dark while listening to music." />
+                    </StackPanel>
+                  </CheckBox>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </Border>
+
+          <!-- requesters -->
+          <Border Classes="card">
+            <StackPanel>
+              <Grid Margin="0,0,0,10">
+                <TextBlock Classes="h2" Text="HOLDING THE DISPLAY AWAKE" Margin="0" />
+                <Button Classes="ghost" Content="Refresh" HorizontalAlignment="Right"
+                        Padding="9,3" Click="OnRefreshRequesters" />
+              </Grid>
+
+              <ItemsControl x:Name="RequesterList">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border Background="{StaticResource SurfaceAlt}" CornerRadius="7" Padding="11,8" Margin="0,0,0,6">
+                      <Grid ColumnDefinitions="*,Auto">
+
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Opacity="{Binding RowOpacity}">
+                          <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding ShortName}" Classes="body" FontWeight="SemiBold" />
+                            <Border Classes="chip" Margin="8,0,0,0" Padding="6,1">
+                              <TextBlock Text="{Binding Kind}" Classes="mono" FontSize="9" />
+                            </Border>
+                            <Border Classes="chip" Margin="8,0,0,0" Padding="6,1"
+                                    IsVisible="{Binding IsBlacklisted}">
+                              <TextBlock Text="BLACKLISTED" Classes="mono" FontSize="9"
+                                         Foreground="{StaticResource Warn}" />
+                            </Border>
+                          </StackPanel>
+                          <TextBlock Text="{Binding Reason}" Classes="mono" Margin="0,3,0,0" />
+                        </StackPanel>
+
+                        <Button Grid.Column="1" Classes="ghost" Content="{Binding ToggleLabel}"
+                                Padding="9,3" Margin="10,0,0,0" VerticalAlignment="Center"
+                                Click="OnToggleBlacklist" />
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <TextBlock x:Name="RequesterEmpty" Classes="muted" Text="Nothing." />
+
+              <StackPanel x:Name="BlacklistPanel" Margin="0,12,0,0" IsVisible="False">
+                <TextBlock Classes="h2" Text="BLACKLISTED — REQUESTS IGNORED" />
+                <ItemsControl x:Name="BlacklistList">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border Background="{StaticResource SurfaceAlt}" CornerRadius="7" Padding="11,6" Margin="0,0,0,6">
+                        <Grid ColumnDefinitions="*,Auto">
+                          <TextBlock Grid.Column="0" Text="{Binding}" Classes="body"
+                                     VerticalAlignment="Center" />
+                          <Button Grid.Column="1" Classes="ghost" Content="Unblacklist"
+                                  Padding="9,3" Click="OnUnblacklist" />
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <!-- startup -->
+          <Border Classes="card">
+            <StackPanel>
+              <TextBlock Classes="h2" Text="STARTUP" />
+
+              <StackPanel>
+                <CheckBox x:Name="StartupToggle" Classes="toggle" IsCheckedChanged="OnStartupChanged">
+                  <StackPanel>
+                    <TextBlock Classes="body" Text="Start at login" />
+                    <TextBlock Classes="mono" Text="Registered with launchd through SMAppService; keeps running in the menu bar across sleep and restarts" />
+                  </StackPanel>
+                </CheckBox>
+              </StackPanel>
+
+              <TextBlock x:Name="StartupNote" Classes="mono" Margin="0,10,0,0"
+                         Foreground="{StaticResource Warn}" IsVisible="False" />
+            </StackPanel>
+          </Border>
+
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- ===================== footer ===================== -->
+      <Border Grid.Row="2" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}"
+              BorderThickness="0,1,0,0" Padding="18,10">
+        <Grid>
+          <TextBlock x:Name="FooterText" Classes="mono" VerticalAlignment="Center" />
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="PauseButton" Classes="ghost" Content="Pause"
+                    Click="OnPause" Margin="0,0,8,0" />
+            <Button Classes="primary" Content="Blank now" Click="OnBlankNow" />
+          </StackPanel>
+        </Grid>
+      </Border>
+
+    </Grid>
+  </Border>
+</Window>

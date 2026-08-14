@@ -73,9 +73,7 @@ public sealed unsafe class MacTray : IDisposable
 
             AddItem("Quit", _app.Quit);
 
-            // The status item itself. The icon is the SF Symbol "display" as a
-            // template image — mandatory on Tahoe's transparent menu bar; the proper
-            // branded template asset arrives with the packaging phase.
+            // The status item itself.
             var statusBar = ObjC.Send(ObjC.Class("NSStatusBar"), ObjC.Sel("systemStatusBar"));
             _statusItem = ObjC.SendForDouble(statusBar, ObjC.Sel("statusItemWithLength:"), -1.0 /* NSVariableStatusItemLength */);
             ObjC.SendVoid(_statusItem, ObjC.Sel("retain"));
@@ -85,17 +83,7 @@ public sealed unsafe class MacTray : IDisposable
             // window-server device. Do not "verify" a status item via CGWindowList on
             // the app's pid; count ControlCenter's layer-25 windows instead.
             var button = ObjC.Send(_statusItem, ObjC.Sel("button"));
-            var symbolName = CF.CreateString("display");
-            try
-            {
-                var image = ObjC.Send(ObjC.Class("NSImage"),
-                    ObjC.Sel("imageWithSystemSymbolName:accessibilityDescription:"), symbolName, IntPtr.Zero);
-                if (image != IntPtr.Zero) ObjC.SendVoid(button, ObjC.Sel("setImage:"), image);
-            }
-            finally
-            {
-                CF.CFRelease(symbolName);
-            }
+            ObjC.SendVoid(button, ObjC.Sel("setImage:"), MenuBarImage());
 
             var tooltip = CF.CreateString("MonitorScreenSaver");
             try
@@ -230,6 +218,45 @@ public sealed unsafe class MacTray : IDisposable
 
         _app.Settings.StartWithWindows = enable;   // same JSON key as Windows, same meaning
         _app.Settings.Save();
+    }
+
+    /// <summary>
+    /// The menu bar image: the app's own artwork (Resources/MenuBarIcon.png, @2x beside
+    /// it) marked as a template, so AppKit takes the mask from its alpha channel and
+    /// tints it for the current menu bar instead of drawing fixed colours — required on
+    /// Tahoe's transparent bar, and what makes it follow light/dark and the Reduce
+    /// Transparency settings.
+    ///
+    /// imageNamed: only finds it inside an .app bundle, so a bare-binary run (dev,
+    /// harness) falls back to the SF Symbol "display".
+    /// </summary>
+    private static IntPtr MenuBarImage()
+    {
+        var name = CF.CreateString("MenuBarIcon");
+        try
+        {
+            var image = ObjC.Send(ObjC.Class("NSImage"), ObjC.Sel("imageNamed:"), name);
+            if (image != IntPtr.Zero)
+            {
+                ObjC.SendVoid(image, ObjC.Sel("setTemplate:"), true);
+                return image;
+            }
+        }
+        finally
+        {
+            CF.CFRelease(name);
+        }
+
+        var symbol = CF.CreateString("display");
+        try
+        {
+            return ObjC.Send(ObjC.Class("NSImage"),
+                ObjC.Sel("imageWithSystemSymbolName:accessibilityDescription:"), symbol, IntPtr.Zero);
+        }
+        finally
+        {
+            CF.CFRelease(symbol);
+        }
     }
 
     // ------------------------------------------------------------------ plumbing

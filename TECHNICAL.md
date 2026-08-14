@@ -237,6 +237,64 @@ Pick roughly the length of a typical short break. 180–300s is the sane middle.
 
 ---
 
+## macOS
+
+The macOS head is the same engine with a different platform layer, not a rewrite. One
+solution, three projects: portable `Core` (the policy engine and settings, behind seam
+interfaces), the WPF `Windows` head, and a `Mac` head that talks to the OS through raw
+objc/CoreFoundation interop. The engine's decision — categories 1 and 2 — is written once.
+Full design, verification log and every trap found on the way live in
+[MACOS-PORT-PLAN.md](MACOS-PORT-PLAN.md).
+
+What each seam binds to:
+
+| Seam | Windows | macOS |
+|---|---|---|
+| Idle | `GetLastInputInfo` | `CGEventSourceSecondsSinceLastEventType` (HID state, no permission) |
+| Display held awake | `SystemExecutionState` | `IOPMCopyAssertionsStatus` |
+| Who is holding it | `powercfg /requests` (**admin**) | `IOPMCopyAssertionsByProcess` (**no admin, ever**) |
+| Displays | GDI + EDID | `CGGetActiveDisplayList` + display UUID + `NSScreen.localizedName` |
+| Sleep / hotplug / lock | `SystemEvents` | `IORegisterForSystemPower`, `CGDisplayRegisterReconfigurationCallback`, `com.apple.screenIsLocked` |
+| Audio | WASAPI peak meters | `kAudioDevicePropertyDeviceIsRunningSomewhere` (coarser: running, not audible) |
+| Overlay | non-activating topmost `Window` | non-activating `NSPanel` at screensaver level |
+| Video | MediaElement (Media Foundation) | `AVQueuePlayer` + `AVPlayerLooper` |
+| Tray | `NotifyIcon` + custom-drawn menu | `NSStatusItem` + native `NSMenu` |
+| Settings window | WPF | Avalonia, same tokens and layout |
+| Start at login | `Run` key / logon task | `SMAppService` (launchd) |
+
+Five things that cost real time, kept here so nobody re-derives them:
+
+- **The status item is not this app's window.** On macOS 26 `NSStatusItem` is rendered and
+  owned by ControlCenter; the button's own `NSWindow` never gets a window-server device, so
+  `CGWindowList` on our own pid shows nothing and the item looks "missing" while working
+  perfectly. Verify with `NSStatusItem.isVisible`, never through our window list.
+- **The cursor cannot be put below the overlay.** The header puts the cursor at
+  `kCGMaximumWindowLevel − 1`, but a window one level above it still renders under the cursor:
+  modern WindowServer composites the cursor above all windows. Six approaches were tested; the
+  only one that works from a non-activating background app is the private CGS connection
+  property `SetsCursorInBackground`, after which `CGDisplayHideCursor` takes effect. Failure is
+  caught and degrades to a visible cursor.
+- **Two clocks make idle jitter.** `LastInputMs` is "now minus idle" across two independently
+  rounding clocks, so consecutive reads wobbled ±1 ms with no input — enough for the engine's
+  manual-blank hold to cancel itself instantly. The mac clock absorbs sub-100 ms jumps; real
+  input moves whole seconds.
+- **`proc_name` is denied for other users' processes**, so holder names fall back to
+  `sysctl kinfo_proc.p_comm` — the same source `ps` uses.
+- **Avalonia is not WPF about layout.** `ScrollViewer.Padding` is subtracted when content is
+  arranged but not when it is measured, and a vertical `StackPanel` arranges an over-desiring
+  child at its desired width instead of clamping like WPF. Together those pushed a card past
+  the window edge. The inset is a `Margin` now, and `HorizontalScrollBarVisibility` is set
+  explicitly because Avalonia defaults it to `Auto` (infinite measure width, nothing wraps)
+  where WPF defaults to `Disabled`.
+
+Avalonia is initialised with `SetupWithoutStarting()` rather than a desktop lifetime: AppKit
+keeps owning the loop (`[NSApp run]`), and Avalonia's dispatcher rides the same main
+CFRunLoop, so one loop pumps the engine timer, the status item and the settings window. It is
+also initialised lazily on the first *Settings…*, so a session that never opens settings never
+loads a UI framework at all.
+
+---
+
 ## Build
 
 ```powershell
@@ -245,7 +303,28 @@ dotnet build                 # dev build
 .\tools\make-icon.ps1        # regenerate Assets\MonitorScreenSaver.ico + Assets\icon.png
 ```
 
-Requires the .NET 9 SDK. Targets `net9.0-windows`, `win-x64`.
+Requires the .NET 9 SDK. The Windows head targets `net9.0-windows`, `win-x64`.
+
+```bash
+dotnet build MonitorScreenSaver.sln   # all three projects (works on macOS too)
+tools/bundle-macos.sh [osx-x64]       # ./publish/MonitorScreenSaver.app
+tools/make-icns.sh                    # regenerate the .icns + menu bar art
+```
+
+The mac head targets `net9.0`, `osx-arm64`/`osx-x64`, and its bundle is ad-hoc signed unless
+`SIGN_IDENTITY` names a Developer ID (which also switches on the hardened runtime and the
+three entitlements CoreCLR needs to JIT under it). One architecture per run: `lipo` cannot
+merge two single-file .NET executables, because the payload is appended after the Mach-O image
+and gets dropped.
+
+Two things the bundle script has to do that are easy to miss:
+
+- **Copy the native dylibs next to the executable.** A single-file publish does *not* embed
+  native libraries, so `libSkiaSharp`/`libHarfBuzzSharp`/`libAvaloniaNative` are separate
+  files. Without them the app runs perfectly until someone opens *Settings…*, then throws
+  `DllNotFoundException`.
+- **Publish into a clean directory.** An incremental publish over an existing one keeps the
+  executable and silently drops those loose dylibs.
 
 Two csproj settings that are load-bearing, both commented in place:
 
@@ -267,6 +346,19 @@ Two csproj settings that are load-bearing, both commented in place:
   samples too sparsely and the face turns to noise.
 - **All resampling happens premultiplied.** Otherwise the transparent-black surround bleeds
   a dark halo into the white sticker outline.
+
+`tools/make-icns.sh` is the mac twin: it takes the same `Assets/icon.png` and writes
+`MonitorScreenSaver.icns` plus 18/36 px menu bar art into
+`src/MonitorScreenSaver.Mac/Assets`. Two notes:
+
+- **`LSUIElement` suppresses the running Dock icon, not the bundle icon.** Without an `.icns`
+  and `CFBundleIconFile`, macOS draws the generic placeholder on the Dock tile of a minimised
+  settings window, in the app switcher and in Finder.
+- **The status item art is shipped in colour and marked `isTemplate`.** AppKit takes the mask
+  from the alpha channel and tints it for the current menu bar, so no separate monochrome
+  asset is needed — and the icon then follows light/dark automatically, which a colour image
+  would not. The iconset stops at 256 px because the artwork does (447 px master); everything
+  macOS draws except Finder at maximum zoom is covered without upscaling.
 
 ---
 
@@ -301,6 +393,33 @@ Exit code 0 = all passed.
 > same-instant read can still see the old value. The engine polls (250 ms) so this is
 > harmless in production, but the self-test polls too, or it flakes.
 
+### On macOS
+
+```bash
+MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver selftest report.txt
+```
+
+75 checks, same shape, same exit code. Section-for-section parity where the concept exists,
+and it takes a **real** display assertion with `IOPMAssertionCreateWithName` to prove
+detection, attribution and the blacklist decision end to end — the direct twin of the Windows
+`SetThreadExecutionState` check. Three sections have no Windows counterpart, and each exists
+because the thing it checks already broke once:
+
+- **The settings window's rendering stack**, realised off-screen: one of every themed control
+  templated and laid out. This is what catches a missing native dylib (the app runs until
+  someone opens *Settings…*) and a Fluent theme resource overridden with the wrong CLR type,
+  which throws only when the control that reads it is first realised. A `Slider` that is never
+  shown is a `Slider` that is never tested, and Dim mode is not reachable without changing
+  settings.
+- **The status item**, through `NSStatusItem.isVisible` — never through our own window list,
+  for the ControlCenter reason above.
+- **The private cursor property**, so a macOS release that revokes it shows up here rather
+  than as a bright arrow on someone's blanked OLED.
+
+> Registering a window with the window server is asynchronous, and the first panel a process
+> creates is the slowest. The overlay-placement check polls for it; pumping a fixed slice and
+> hoping passed on the built-in display and failed on both externals.
+
 ## Watch mode
 
 ```powershell
@@ -315,6 +434,18 @@ it is not obvious which still gets delivered while the session is locked. In pra
 
 This is how the lock-screen timings above were measured. Start it, lock the machine, wait,
 unlock, then read the log. Runs until killed; no tray, no engine, no overlays.
+
+```bash
+MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver watch [path]
+```
+
+The mac twin logs sleep/wake, display-topology and lock/unlock transitions with the same
+timestamps, opening with the system's own power settings (`pmset -g custom`) and the display
+list, then a 10-second heartbeat carrying idle time, the assertion flags, audio, fullscreen,
+the frontmost app and the current display holders. The `displaysleep` value in that header is
+the number that matters: if it is shorter than the app's idle timeout, macOS powers the panel
+off before we ever blank it. Default log path is
+`~/Library/Application Support/MonitorScreenSaver/watch.log`.
 
 ---
 
@@ -388,21 +519,48 @@ Two failure modes are worth knowing about:
 
 ## Layout
 
+One solution, three projects. Everything in `Core` is platform-free and shared; each head
+binds the seams its OS provides.
+
 ```
-App.xaml.cs               tray icon, menu, wiring, lifecycle
-Core/AppSettings.cs       settings + MonitorConfig, per-display resolution
-Core/BlankingEngine.cs    the policy — category 1 + category 2 decision
-Core/AudioActivity.cs     WASAPI endpoint peak meters (audio-activity option)
-Core/PowerRequests.cs     SystemExecutionState + powercfg /requests parser
-Core/OverlayWindow.cs     one non-activating topmost window: black, dim or video
-Core/OverlayManager.cs    keeps overlays in sync with topology + per-display config
-Core/DisplayEnumerator.cs monitor enumeration + EDID friendly names
-Core/SystemEventSink.cs   sleep / hotplug / lock notifications
-Core/SelfTest.cs          headless diagnostics (--selftest)
-Core/WatchMode.cs         display-power transition logger (--watch)
-Core/CrashLog.cs          error.log + P/Invoke callback guards
-UI/ConfigWindow.xaml      settings window
-UI/Theme.xaml             dark design tokens and control styles
-tools/make-icon.ps1       icon compositor
-tools/publish.ps1         single-file release build
+src/MonitorScreenSaver.Core/            net9.0 — no OS calls at all
+  Platform.cs                 the seam interfaces + EnginePlatform bundle
+  BlankingEngine.cs           the policy — category 1 + category 2 decision
+  OverlayManager.cs           keeps overlays in sync with topology + per-display config
+  AppSettings.cs              settings + MonitorConfig, per-display resolution
+  PowerModels.cs              requester/execution-state/snapshot models
+  DisplayModels.cs            display target + pixel rect
+  SystemEvents.cs             the event kinds a head can raise
+  CrashLog.cs                 error.log + callback guards
+
+src/MonitorScreenSaver.Windows/         net9.0-windows — the WPF head
+  App.xaml.cs                 tray icon, menu, wiring, lifecycle
+  Platform/WindowsPlatform.cs the seam implementations
+  Platform/PowerRequests.cs   SystemExecutionState + powercfg /requests parser
+  Platform/OverlayWindow.cs   one non-activating topmost window: black, dim or video
+  Platform/DisplayEnumerator.cs  monitor enumeration + EDID friendly names
+  Platform/SystemEventSink.cs sleep / hotplug / lock notifications
+  Platform/AudioActivity.cs   WASAPI endpoint peak meters
+  Platform/SelfTest.cs        headless diagnostics (--selftest)
+  Platform/WatchMode.cs       display-power transition logger (--watch)
+  UI/ConfigWindow.xaml        settings window
+  UI/Theme.xaml               dark design tokens and control styles
+
+src/MonitorScreenSaver.Mac/             net9.0 — the AppKit head
+  Program.cs                  command line: tray, settings, selftest, watch, harnesses
+  Interop/                    objc_msgSend, CoreFoundation, CoreGraphics, IOKit, CoreAudio
+  Platform/MacApp.cs          the App.xaml.cs twin: wiring, watchdog, [NSApp run]
+  Platform/MacPlatform.cs     the seam implementations
+  Platform/MacOverlayWindow.cs  non-activating NSPanel: black, dim or AVPlayerLooper video
+  Platform/MacTray.cs         NSStatusItem + NSMenu
+  Platform/MacSelfTest.cs     headless diagnostics (selftest)
+  Platform/MacWatchMode.cs    power/topology/session logger (watch)
+  UI/SettingsWindow.axaml     the Avalonia settings window
+  UI/Theme.axaml              the same tokens, as Avalonia styles
+  Assets/                     .icns + menu bar template art
+
+tools/make-icon.ps1           icon compositor (.ico + README png)
+tools/make-icns.sh            the mac twin (.icns + menu bar art)
+tools/publish.ps1             single-file Windows release build
+tools/bundle-macos.sh         the .app bundle
 ```

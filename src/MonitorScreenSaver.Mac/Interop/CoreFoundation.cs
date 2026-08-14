@@ -115,6 +115,15 @@ internal static class CF
     [DllImport(Lib)]
     internal static extern void CFRunLoopStop(IntPtr runLoop);
 
+    /// <summary>
+    /// Pumps the run loop for at most <paramref name="seconds"/>. Used by the selftest,
+    /// which has to let AppKit place the windows it just created without handing the
+    /// thread over for good the way CFRunLoopRun does.
+    /// </summary>
+    [DllImport(Lib)]
+    internal static extern int CFRunLoopRunInMode(IntPtr mode, double seconds,
+        [MarshalAs(UnmanagedType.I1)] bool returnAfterSourceHandled);
+
     [DllImport(Lib)]
     internal static extern void CFRunLoopAddSource(IntPtr runLoop, IntPtr source, IntPtr mode);
 

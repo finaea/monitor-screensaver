@@ -29,7 +29,12 @@ public sealed class MacApp
     internal OverlayManager Overlays => _overlays;
     internal PowerSnapshot Requesters => _requesters;
 
-    public void Run()
+    /// <param name="openSettings">
+    /// Opens the settings window as soon as the app has launched. The tray menu is owned
+    /// and rendered by ControlCenter on macOS 26, so it cannot be driven from a script —
+    /// this is how the window gets exercised (and screenshotted) in the real app shell.
+    /// </param>
+    public void Run(bool openSettings = false)
     {
         AppKit.EnsureApplication();
 
@@ -76,6 +81,7 @@ public sealed class MacApp
         {
             trayBootstrap!.Stop();
             if (_tray is null) _tray = new MacTray(this);
+            if (openSettings) OpenSettings();
         });
         trayBootstrap.Start();
 
@@ -107,33 +113,7 @@ public sealed class MacApp
         _settings.Save();
     }
 
-    /// <summary>
-    /// Placeholder until the settings window (Phase 5): opens settings.json with the
-    /// default editor so every option is at least reachable.
-    /// </summary>
-    internal void OpenSettings()
-    {
-        try
-        {
-            _settings.Save();   // make sure the file exists with current values
-
-            var path = CF.CreateString(AppSettings.FilePath);
-            try
-            {
-                var url = ObjC.Send(ObjC.Class("NSURL"), ObjC.Sel("fileURLWithPath:"), path);
-                var workspace = ObjC.Send(ObjC.Class("NSWorkspace"), ObjC.Sel("sharedWorkspace"));
-                ObjC.SendVoid(workspace, ObjC.Sel("openURL:"), url);
-            }
-            finally
-            {
-                CF.CFRelease(path);
-            }
-        }
-        catch (Exception ex)
-        {
-            CrashLog.Write("MacApp.OpenSettings", ex);
-        }
-    }
+    internal void OpenSettings() => UI.MacUi.ShowSettings(this);
 
     internal void Quit()
     {
@@ -180,7 +160,7 @@ public sealed class MacApp
         _overlays.HideAll();
     }
 
-    private void RefreshDisplays()
+    internal void RefreshDisplays()
     {
         _overlays.Refresh();
         if (_engine.Status.Blanked && !_sessionLocked) _overlays.ShowAll();

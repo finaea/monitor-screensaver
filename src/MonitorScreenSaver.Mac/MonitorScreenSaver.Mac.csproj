@@ -14,10 +14,34 @@
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <TieredPGO>true</TieredPGO>
+    <!--
+      AVLN3001: the settings window has no parameterless constructor, so Avalonia's
+      *runtime* XAML loader could not instantiate it. Deliberate — it is always
+      constructed in code with the app shell it renders, and its XAML is compiled.
+    -->
+    <NoWarn>$(NoWarn);AVLN3001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\MonitorScreenSaver.Core\MonitorScreenSaver.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    Avalonia backs the settings window only. The tray, overlays and every platform
+    service stay on raw objc/CF interop, so nothing on the blanking path depends on
+    a UI framework: Avalonia is initialised lazily the first time Settings… is
+    opened, and a user who never opens it never pays for it.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Native" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Skia" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.20" />
+  </ItemGroup>
+
+  <!-- The title-bar icon, shared with the Windows head rather than duplicated. -->
+  <ItemGroup>
+    <AvaloniaResource Include="..\MonitorScreenSaver.Windows\Assets\icon.png" Link="Assets\icon.png" />
   </ItemGroup>
 
 </Project>

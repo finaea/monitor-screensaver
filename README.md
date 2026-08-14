@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="Assets/icon.png" alt="MonitorScreenSaver" width="128">
+<img src="src/MonitorScreenSaver.Windows/Assets/icon.png" alt="MonitorScreenSaver" width="128">
 
 # MonitorScreenSaver
 
 **Play a screensaver video or display black screen on OLED monitor without turning it to sleep.**
 
-Windows 10/11 · x64 · sits in the tray
+Windows 10/11 · macOS 13+ · sits in the tray / menu bar
 
 </div>
 
@@ -46,6 +46,19 @@ cd MonitorScreenSaver
 
 Needs the .NET 9 SDK to build. Nothing to install to run.
 
+On **macOS** there is no release build yet, so build it yourself:
+
+```bash
+git clone <this repo>
+cd MonitorScreenSaver
+tools/bundle-macos.sh              # produces ./publish/MonitorScreenSaver.app
+open publish/MonitorScreenSaver.app
+```
+
+Pass `osx-x64` for an Intel build (`tools/bundle-macos.sh osx-x64`). The bundle is ad-hoc
+signed, which is fine on the machine that built it — on any other Mac Gatekeeper will refuse
+the first launch, so right-click → **Open** once. See [macOS](#macos) below.
+
 ---
 
 ## Using it
@@ -69,6 +82,50 @@ Blanking clears the instant you touch the keyboard or mouse, or switch windows.
 > something **longer than MonitorScreenSaver's idle timeout**, otherwise Windows powers your monitors
 > off first and the app never gets a chance. 30 minutes is a good backstop — prefer that over
 > `Never`, as an insurance in case this app fails.
+
+---
+
+## macOS
+
+Same app, same engine, same settings window — it lives in the **menu bar** instead of the
+notification area. Everything in *Using it* above applies; this section is only the
+differences.
+
+**Better on macOS:** the whole administrator story disappears. Seeing which app is holding
+your display awake, and blacklisting it, needs admin rights on Windows because
+`powercfg /requests` is admin-only. macOS reports the same thing through
+`IOPMCopyAssertionsByProcess`, which works as a normal user — so there is no elevation
+banner, no "Restart elevated", no logon task, and the holder list simply always works.
+
+| | |
+|---|---|
+| **Menu bar, not tray** | The menu is a real `NSMenu`, so it looks like a macOS menu rather than the custom-drawn Windows one. Same items in the same order, including the live countdown and the inline holder list. |
+| **Start at login** | Registered with launchd through `SMAppService`, and visible to you in System Settings → General → Login Items. Only works from inside the `.app` bundle, so move it somewhere permanent (e.g. `/Applications`) before switching it on — it registers the path it was launched from. |
+| **Video formats** | Plays what AVFoundation decodes: MP4/M4V/MOV/TS. **WMV, AVI, MKV and WebM do not work** — that is the one feature the Windows build has and this one doesn't. |
+| **Fonts** | No Segoe UI or Cascadia Mono on macOS, so the settings window uses San Francisco and SF Mono. Same sizes and layout, slightly different letterforms. |
+| **Minimising** | The settings window minimises to a Dock tile like any other window (click it to bring it back). The app itself still has no Dock icon. |
+| **The cursor** | Hidden while the screens are blanked, because a lit arrow parked on a blanked OLED is the exact thing this app exists to prevent. That needs a private API — if a future macOS breaks it, blanking still works and the cursor just stays visible. |
+
+Set macOS's own display-sleep timer **longer** than the app's idle timeout
+(`pmset -g custom`, or System Settings → Lock Screen), for the same reason as on Windows:
+whichever timer is shorter wins, and if macOS powers the panel off first the app never gets a
+chance.
+
+Two things macOS does *not* let any app cover: the **login/lock screen** (it belongs to
+`loginwindow`), and anything drawn above the screensaver window level by another app — a
+desktop-pet or overlay utility can float above the blanking overlay.
+
+Diagnostics live on the binary inside the bundle:
+
+```bash
+publish/MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver selftest report.txt
+publish/MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver watch
+```
+
+`selftest` runs 75 checks against your actual machine — displays, overlay placement against
+the window server, power-assertion detection and attribution, the settings window's rendering
+stack, the menu bar item, the cursor path — and exits 0 when they all pass. `watch` logs every
+power, display-topology and lock transition with a heartbeat of everything the engine reads.
 
 ---
 
@@ -216,14 +273,23 @@ for the tray icon. If you want something that idles at 5 MB, this isn't it. Full
 
 ## Something went wrong
 
-Check `%APPDATA%\MonitorScreenSaver\error.log` first. A window that fails to build looks exactly like
-"nothing happened" otherwise.
+Check the error log first — a window that fails to build looks exactly like "nothing happened"
+otherwise:
 
-There's also a built-in diagnostic that runs 103 checks against your actual machine — display
+| | |
+|---|---|
+| Windows | `%APPDATA%\MonitorScreenSaver\error.log` |
+| macOS | `~/Library/Application Support/MonitorScreenSaver/error.log` |
+
+There's also a built-in diagnostic that runs against your actual machine — display
 enumeration, overlay placement, power-request detection, the lot:
 
 ```powershell
-MonitorScreenSaver.exe --selftest report.txt
+MonitorScreenSaver.exe --selftest report.txt          # Windows, 103 checks
+```
+
+```bash
+MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver selftest report.txt   # macOS, 75 checks
 ```
 
 Exit code 0 means everything passed. If you're filing an issue, attach that file.
