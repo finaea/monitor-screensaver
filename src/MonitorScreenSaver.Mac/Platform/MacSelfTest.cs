@@ -423,8 +423,12 @@ public static class MacSelfTest
                 Check(mine is not null, "attribution blames this process for the assertion it holds");
                 if (mine is not null) Line($"    attributed to: {mine.ShortName} ({mine.Kind}) {mine.Reason}");
 
-                // The blacklist decision the engine actually makes.
-                var blacklisted = new AppSettings { BlacklistedRequesters = [mine?.ShortName ?? "MonitorScreenSaver"] };
+                // The blacklist decision the engine actually makes. BlacklistCovers is all-or
+                // -nothing — it returns false unless *every* current DISPLAY holder is listed —
+                // so the list has to be every holder, not just ours. Listing only ours failed
+                // the moment anything else held the display (a stray `caffeinate -d` was enough),
+                // which said nothing about the engine and everything about the machine.
+                var blacklisted = new AppSettings { BlacklistedRequesters = [.. snap.Display.Select(r => r.ShortName)] };
                 Check(blacklisted.BlacklistCovers(snap),
                     "blacklisting every current holder makes the engine ignore the aggregate flag");
                 Check(!new AppSettings().BlacklistCovers(snap), "an empty blacklist never covers a live holder");
