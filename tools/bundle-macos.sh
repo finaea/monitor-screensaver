@@ -28,6 +28,13 @@ rid="${1:-osx-arm64}"
 out="$root/publish"
 app="$out/MonitorScreenSaver.app"
 
+# Read the version out of the csproj rather than repeating it here. This is what names the
+# .dmg (make-dmg.sh reads CFBundleShortVersionString back off the built plist), so a stale
+# literal here used to ship a release under the previous version's filename.
+csproj="$root/src/MonitorScreenSaver.Mac/MonitorScreenSaver.Mac.csproj"
+version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$csproj" | head -1)
+[ -n "$version" ] || { echo "error: no <Version> in $csproj" >&2; exit 1; }
+
 # Always publish into a clean directory: an incremental publish over an existing one
 # leaves the executable in place but drops the loose native .dylib files next to it.
 rm -rf "$out/mac-bin"
@@ -62,7 +69,8 @@ else
     echo "warning: $assets/MonitorScreenSaver.icns missing — run tools/make-icns.sh" >&2
 fi
 
-cat > "$app/Contents/Info.plist" <<'PLIST'
+# Unquoted heredoc: $version is the only expansion in here, and it has to expand.
+cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -78,9 +86,9 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.1.0</string>
+    <string>$version</string>
     <key>CFBundleVersion</key>
-    <string>1.1.0</string>
+    <string>$version</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <!-- Menu-bar-only: no Dock icon, no app switcher entry - the tray-app posture. -->

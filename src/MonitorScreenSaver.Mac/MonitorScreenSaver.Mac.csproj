@@ -8,6 +8,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>MonitorScreenSaver.Mac</RootNamespace>
     <AssemblyName>MonitorScreenSaverMac</AssemblyName>
+    <!--
+      One source of truth for the mac version: the settings window footer reads it off the
+      assembly, and tools/bundle-macos.sh greps it out of this file for CFBundleShortVersionString,
+      which is in turn what names the .dmg. Keep in step with the Windows head's csproj.
+    -->
+    <Version>1.2.0</Version>
     <!-- Function pointers for CF/IOKit callbacks. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Same footprint trade as the Windows head: tray-app-all-day. -->

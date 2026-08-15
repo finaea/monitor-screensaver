@@ -364,8 +364,10 @@ Anything marked *(spike)* still needs a proof-of-concept before it counts as fac
     renders on macOS 26; setting it on the open window silently does nothing, while icon
     positions set in the same script take effect immediately.
   - Still open: notarization (needs the $99 Developer ID; `make-dmg.sh` signs the image
-    when `SIGN_IDENTITY` is set, untested), and `CFBundleShortVersionString` is still
-    hardcoded to 1.1.0 in `bundle-macos.sh`, which is what names the `.dmg`.
+    when `SIGN_IDENTITY` is set, untested). ~~`CFBundleShortVersionString` is still hardcoded
+    to 1.1.0 in `bundle-macos.sh`, which is what names the `.dmg`.~~ — fixed for 1.2.0: the
+    script greps `<Version>` out of the mac csproj, which is now also what the settings
+    window footer reads.
 
 - **2026-08-15 — The tray holder list is read-only now, on both heads.** Reported from use:
   a blacklisted process appeared twice in the menu, once greyed and once not. Both rows were

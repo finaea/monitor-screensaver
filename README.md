@@ -33,6 +33,8 @@ window around while you sit there waiting. Microsoft's own name for that is
 
 ## Install
 
+### Windows
+
 Grab `MonitorScreenSaver.exe` from [Releases](../../releases) and run it. Single file, no installer,
 nothing to unpack — it's self-contained, so you don't need .NET installed.
 
@@ -46,7 +48,40 @@ cd MonitorScreenSaver
 
 Needs the .NET 9 SDK to build. Nothing to install to run.
 
-On **macOS**, build it yourself:
+### macOS
+
+Grab the disk image for your Mac from [Releases](../../releases) — `…-macos-arm64.dmg` for
+Apple silicon, `…-macos-x64.dmg` for Intel. There is no universal build, because `lipo` cannot
+merge two single-file .NET executables. If you're not sure which you have,  → *About This Mac*:
+"Apple M*x*" is arm64, "Intel" is x64.
+
+1. **Double-click the `.dmg`.** A window opens with the app on the left and an **Applications**
+   shortcut on the right.
+2. **Drag MonitorScreenSaver onto Applications.** Do it this way, in the Finder — don't run it
+   from inside the disk image or from Downloads. *Start at login* records the bundle's absolute
+   path, and an app outside `/Applications` is liable to App Translocation, where macOS runs it
+   from a randomised temporary mount that won't exist next boot.
+3. **Eject the disk image** — ⌘E, or drag it out of the Finder sidebar.
+4. **Let the first launch fail.** The build is ad-hoc signed rather than notarized, so Gatekeeper
+   refuses it: *"Apple could not verify… it may contain malware"*. That's expected. Since macOS
+   Sequoia, right-click → *Open* no longer gets around it. Instead, after the refusal open
+   **System Settings → Privacy & Security**, scroll to **Security** near the bottom, click
+   **Open Anyway** next to the MonitorScreenSaver line, authenticate, then launch it again and
+   confirm **Open**. You only do this once.
+
+   Or skip the whole dance with one command:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/MonitorScreenSaver.app
+   ```
+5. **Look in the menu bar, not the Dock.** It's a menu-bar app (`LSUIElement`), so there is no
+   Dock icon and no window on launch — find the small monitor glyph at the top right and click
+   it. *Settings…* opens the window from the screenshot above.
+
+Doing this properly — so none of step 4 is needed — takes a $99/year Apple Developer ID that
+this project doesn't have. See [macOS](#macos) below.
+
+Or build it yourself:
 
 ```bash
 git clone <this repo>
@@ -56,18 +91,9 @@ tools/make-dmg.sh                  # optional: wraps it in a release .dmg
 open publish/MonitorScreenSaver.app
 ```
 
-Pass `osx-x64` for an Intel build (`tools/bundle-macos.sh osx-x64`); there is no universal
-build, because `lipo` cannot merge two single-file .NET executables. Drag the app to
-**Applications** rather than running it from Downloads — *Start at login* records the
-bundle's absolute path, and an app left in Downloads is also liable to App Translocation,
-which runs it from a randomised temporary mount.
-
-The bundle is ad-hoc signed, which is fine on the machine that built it. On any other Mac
-Gatekeeper refuses the first launch, and since macOS Sequoia right-click → **Open** no
-longer bypasses it: open **System Settings → Privacy & Security**, scroll to *Security* at
-the bottom, click **Open Anyway**, authenticate, then launch it again and click **Open**.
-Or skip all of that with `xattr -dr com.apple.quarantine /Applications/MonitorScreenSaver.app`.
-Signing properly needs a $99/year Developer ID; see [macOS](#macos) below.
+Pass `osx-x64` for an Intel build (`tools/bundle-macos.sh osx-x64`). A self-built bundle is
+ad-hoc signed too, but Gatekeeper doesn't quarantine what never came off the network, so it
+launches without step 4 on the machine that built it.
 
 ---
 

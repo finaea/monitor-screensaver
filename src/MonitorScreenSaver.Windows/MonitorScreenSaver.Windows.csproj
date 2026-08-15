@@ -12,7 +12,7 @@
     <RootNamespace>MonitorScreenSaver</RootNamespace>
     <ApplicationIcon>Assets\MonitorScreenSaver.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Product>MonitorScreenSaver</Product>
     <Description>Per-monitor OLED blanking and video screensaver that mirrors the Windows display-idle policy.</Description>
     <SelfContained>false</SelfContained>
