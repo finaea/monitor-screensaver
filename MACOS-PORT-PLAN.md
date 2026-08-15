@@ -326,6 +326,47 @@ Anything marked *(spike)* still needs a proof-of-concept before it counts as fac
     Option-plus-Shift-only shortcuts silently fail for *sandboxed* apps — not our case, but our
     shape rules would currently permit exactly that combination.
 
+- **2026-08-15 — Release packaging: `tools/make-dmg.sh`.** A disk image rather than a zip,
+  and not for the usual reasons — measured here the zip is *better* on every mechanical
+  axis (38.4 MB against 43.1 MB, 2.3 s against 16.1 s, one command against three) and
+  neither format changes Gatekeeper at all, since quarantine propagates through both. The
+  deciding factor is specific to this app: `SMAppService` records an absolute bundle path
+  (`sfltool dumpbtm` shows `URL: file:///…/MonitorScreenSaver.app/`), and an app launched
+  out of `~/Downloads` is liable to App Translocation, which Apple DTS says is cleared only
+  by moving it *in the Finder*. The `/Applications` symlink exists to provoke that move.
+  - **Gatekeeper, measured rather than assumed.** A copy stamped with Safari's quarantine
+    attribute produced, in `syspolicyd`: `GatekeeperPolicyScanError Code=-67018 "Code did
+    not match any currently allowed policy"` → `Prompt shown` → `Adding Gatekeeper denial
+    breadcrumb (open)` → `Terminating process due to Gatekeeper rejection`. The process
+    starts and is then killed; the *breadcrumb* is what makes "Open Anyway" appear in
+    System Settings, which is why it cannot be pre-authorised. `syspolicy_check
+    distribution` calls the missing notarization ticket Fatal and the ad-hoc signature a
+    Warning.
+  - **The poster's colours are a constraint, not a style.** Finder draws icon labels with
+    no shadow, halo or plate, and `.DS_Store` cannot set their colour — proven with a disk
+    image carrying a black-to-white ramp, where the label over the dark end vanished.
+    Screenshotting the finished window in both appearances then showed the ink is dark in
+    *both* on 26.6 (darkest pixel 18, byte for byte identical), so a light background would
+    be safe today; the panel is nevertheless held at the luminance that clears 4.5:1
+    against black *and* white, because the rule is undocumented and Apple's to change.
+  - **The bug was in the ruler, not the artwork.** A colour written `#75767F` measured back
+    as `#878991` — a whole contrast grade — and the first diagnosis was wrong twice over
+    (blamed on `deviceRGB` output, then on `NSGradient`'s convenience initialisers
+    interpolating in generic RGB). Both were disproved by isolation: the raw context bytes
+    were `#75767F` all along, `NSGradient(colorsAndLocations:)` renders the colour exactly,
+    and a `deviceRGB` rep and an explicit sRGB `CGContext` produce byte-identical pixels
+    with the same "sRGB IEC61966-2.1" profile. The actual fault is that
+    `NSBitmapImageRep.colorAt` drops the colour-space tag and reports lightened values, so
+    the *measuring* tool was lying. The acceptance test now reads raw sRGB bytes and
+    detects buffer orientation from a known landmark rather than assuming; both "fixes"
+    were reverted, since a no-op change carrying a false rationale is worse than none.
+  - **Finder needs the window closed and reopened** before a newly set `background picture`
+    renders on macOS 26; setting it on the open window silently does nothing, while icon
+    positions set in the same script take effect immediately.
+  - Still open: notarization (needs the $99 Developer ID; `make-dmg.sh` signs the image
+    when `SIGN_IDENTITY` is set, untested), and `CFBundleShortVersionString` is still
+    hardcoded to 1.1.0 in `bundle-macos.sh`, which is what names the `.dmg`.
+
 ---
 
 ## TL;DR

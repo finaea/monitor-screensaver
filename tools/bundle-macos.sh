@@ -140,3 +140,4 @@ echo
 echo "Bundled: $app  ($(du -sh "$app" | cut -f1))  [$rid, $(lipo -archs "$app/Contents/MacOS/MonitorScreenSaver")]"
 echo "Run with: open '$app'"
 echo "Verify:   '$app/Contents/MacOS/MonitorScreenSaver' selftest"
+echo "Package:  tools/make-dmg.sh    (release .dmg with an /Applications symlink)"

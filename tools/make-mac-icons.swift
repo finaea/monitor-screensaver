@@ -17,6 +17,11 @@
 //       too. Each size is rendered on its own instead of resampling one master, so the
 //       tile's corners stay clean at 16 pt.
 //
+//   src/MonitorScreenSaver.Mac/Assets/DmgBackground.png (+@2x)
+//       The "drag me to Applications" poster behind the icons in the disk image window
+//       (tools/make-dmg.sh). Its one hard constraint is contrast in both appearances —
+//       see drawDmgBackground.
+//
 // Needs Xcode Command Line Tools for /usr/bin/swift. The outputs are committed, exactly
 // like MonitorScreenSaver.ico, so nobody has to run this to build the app.
 //
@@ -127,19 +132,153 @@ func drawAppIcon(_ size: CGFloat, _ art: NSImage) {
     // looking like a hole punched in the Dock without turning into a colour of its own.
     // #0E0F14 is the settings window's own background (UI/Theme.axaml "Bg").
     let path = NSBezierPath(roundedRect: tile, xRadius: radius, yRadius: radius)
-    let ground = NSGradient(
+    NSGradient(
         starting: NSColor(srgbRed: 0x08 / 255.0, green: 0x09 / 255.0, blue: 0x0D / 255.0, alpha: 1),
         ending: NSColor(srgbRed: 0x16 / 255.0, green: 0x18 / 255.0, blue: 0x22 / 255.0, alpha: 1))!
-    ground.draw(in: path, angle: 90)
+        .draw(in: path, angle: 90)
 
     let side = size * artFraction
     art.draw(in: NSRect(x: tile.midX - side / 2, y: tile.midY - side / 2, width: side, height: side),
              from: .zero, operation: .sourceOver, fraction: 1)
 }
 
+// ---------------------------------------------------------------- dmg background
+
+// The disk image window's content area, in points. tools/make-dmg.sh sets the Finder
+// window to exactly this plus the title bar, so these numbers and the icon positions in
+// that script are one layout — change them together.
+let dmgWidth: CGFloat = 600
+let dmgHeight: CGFloat = 400
+
+// Icon centres, measured from the TOP left because that is the corner Finder's
+// `set position of item` counts from. Everything below converts to y-up for drawing.
+let dmgIconY: CGFloat = 190
+let dmgAppX: CGFloat = 160
+let dmgApplicationsX: CGFloat = 440
+
+/// Where Finder paints an icon's label: directly under a 128 pt icon, so a band roughly
+/// 255–280 pt down. Named because the whole design is built around it.
+let dmgLabelBand = (top: CGFloat(255), bottom: CGFloat(282))
+
+/// The poster behind the icons.
+///
+/// The design is driven by one measured constraint rather than taste: Finder draws icon
+/// labels with no shadow, halo or plate behind them, and `.DS_Store` has no say in their
+/// colour. A disk image with a black-to-white ramp behind it made that concrete — the
+/// label over the dark end was simply unreadable.
+///
+/// Screenshotting the finished window in both appearances then pinned down the rule on
+/// macOS 26.6: with a background picture set, the ink is DARK in dark mode too (darkest
+/// pixel 18 in both, byte for byte). So the only hard requirement is that the label area
+/// be light enough for dark text.
+///
+/// It is nevertheless held at the colour that clears 4.5:1 against black *and* white
+/// rather than going lighter, which would read better today. Apple has never documented
+/// this, the ramp test showed the rule is theirs to change, and a version that switched to
+/// white ink would erase the labels on a light panel. The cost of the insurance is one
+/// contrast grade; the cost of being wrong is an unreadable window.
+func drawDmgBackground() {
+    let canvas = NSRect(x: 0, y: 0, width: dmgWidth, height: dmgHeight)
+
+    // Ground: the app icon's own gradient (#08090D → #16181F), darkest at the top.
+    NSGradient(
+        starting: NSColor(srgbRed: 0x16 / 255.0, green: 0x18 / 255.0, blue: 0x1F / 255.0, alpha: 1),
+        ending: NSColor(srgbRed: 0x08 / 255.0, green: 0x09 / 255.0, blue: 0x0D / 255.0, alpha: 1))!
+        .draw(in: canvas, angle: 90)
+
+    // The shelf: one rounded panel holding both icons, the arrow and — the point of the
+    // whole exercise — both labels. Earlier attempts used soft-edged fills (a band, then an
+    // ellipse); both hit the contrast target and both looked like grey fog on black,
+    // because a shape with no edge reads as a stain rather than an object. A panel with a
+    // border reads as deliberate, and its flat interior makes the contrast budget trivial
+    // to hold: every pixel a label can land on is the same colour.
+    let shelf = NSRect(x: 40, y: dmgHeight - 302, width: dmgWidth - 80, height: 198)
+    let shelfPath = NSBezierPath(roundedRect: shelf, xRadius: 26, yRadius: 26)
+
+    NSGraphicsContext.saveGraphicsState()
+    let shadow = NSShadow()
+    shadow.shadowColor = NSColor(white: 0, alpha: 0.55)
+    shadow.shadowBlurRadius = 26
+    shadow.shadowOffset = NSSize(width: 0, height: -8)
+    shadow.set()
+
+    // Kept within a few points of dmgPoolColour top to bottom, so the gradient is texture
+    // rather than a range: at the label row it lands back on the balanced colour.
+    NSGradient(
+        starting: NSColor(srgbRed: 0x73 / 255.0, green: 0x74 / 255.0, blue: 0x7D / 255.0, alpha: 1),
+        ending: NSColor(srgbRed: 0x7C / 255.0, green: 0x7D / 255.0, blue: 0x86 / 255.0, alpha: 1))!
+        .draw(in: shelfPath, angle: 90)
+    NSGraphicsContext.restoreGraphicsState()
+
+    // A lit top edge and a hairline border: the two cues that make a flat rectangle read as
+    // a raised surface rather than a hole.
+    NSGraphicsContext.saveGraphicsState()
+    shelfPath.setClip()
+    NSColor(white: 1, alpha: 0.14).setFill()
+    NSBezierPath(rect: NSRect(x: shelf.minX, y: shelf.maxY - 1.5,
+                              width: shelf.width, height: 1.5)).fill()
+    NSGraphicsContext.restoreGraphicsState()
+
+    NSColor(white: 1, alpha: 0.09).setStroke()
+    shelfPath.lineWidth = 1
+    shelfPath.stroke()
+
+    // Arrow, at icon-centre height, spanning the gap between the two 128 pt icons. Dark,
+    // because at this height it is inside the lit pool.
+    let arrowY = dmgHeight - dmgIconY
+    let shaftEnd = dmgApplicationsX - 64 - 30
+    let shaftStart = dmgAppX + 64 + 28
+
+    NSColor(srgbRed: 0x1A / 255.0, green: 0x1B / 255.0, blue: 0x23 / 255.0, alpha: 0.72).setFill()
+    NSBezierPath(roundedRect: NSRect(x: shaftStart, y: arrowY - 1.75,
+                                     width: shaftEnd - shaftStart, height: 3.5),
+                 xRadius: 1.75, yRadius: 1.75).fill()
+
+    let head = NSBezierPath()
+    head.move(to: NSPoint(x: shaftEnd - 1, y: arrowY + 9))
+    head.line(to: NSPoint(x: shaftEnd + 21, y: arrowY))
+    head.line(to: NSPoint(x: shaftEnd - 1, y: arrowY - 9))
+    head.close()
+    head.fill()
+
+    // Wordmark, on the dark sky well clear of the icons' top edge (icons reach
+    // dmgHeight - dmgIconY + 64).
+    centred("MonitorScreenSaver", .systemFont(ofSize: 26, weight: .semibold),
+            NSColor(srgbRed: 0xE9 / 255.0, green: 0xEA / 255.0, blue: 0xEE / 255.0, alpha: 1),
+            y: dmgHeight - 46)
+
+    centred("Drag the app onto Applications", .systemFont(ofSize: 13, weight: .regular),
+            NSColor(srgbRed: 0xA2 / 255.0, green: 0xA5 / 255.0, blue: 0xB0 / 255.0, alpha: 1),
+            y: dmgHeight - 76)
+}
+
+/// The lit pool's colour. #75767F is not a taste decision: contrast against black is
+/// (Y + 0.05) / 0.05 and against white is 1.05 / (Y + 0.05), so the two are equal at a
+/// relative luminance of 0.179 — 4.6:1 both ways, which is the best any single colour can
+/// do when it has to carry black text and white text. Anything lighter loses dark mode,
+/// anything darker loses light mode.
+func dmgPoolColour(_ alpha: CGFloat) -> NSColor {
+    NSColor(srgbRed: 0x75 / 255.0, green: 0x76 / 255.0, blue: 0x7F / 255.0, alpha: alpha)
+}
+
+
+/// Draws `string` horizontally centred on the canvas, `y` being the top of the line box.
+func centred(_ string: String, _ font: NSFont, _ colour: NSColor, y: CGFloat) {
+    let text = NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: colour])
+    let size = text.size()
+    text.draw(at: NSPoint(x: (dmgWidth - size.width) / 2, y: y - size.height))
+}
+
 // ---------------------------------------------------------------- output
 
 /// Renders `body` into a PNG. Drawing happens in points; `scale` sets the pixel density.
+///
+/// The output is sRGB and the colour constants above survive to the file unchanged — both
+/// checked, because the disk image background depends on it: `deviceRGB` here and an
+/// explicit sRGB CGContext produce byte-identical pixels and the same
+/// "sRGB IEC61966-2.1" profile. If a colour ever appears to have shifted, suspect the tool
+/// doing the reading — `NSBitmapImageRep.colorAt` drops the colour-space tag and reports
+/// values lightened by a whole contrast grade.
 func render(_ pointWidth: CGFloat, _ pointHeight: CGFloat, scale: CGFloat,
             to path: String, _ body: () -> Void) {
     let px = Int(pointWidth * scale), py = Int(pointHeight * scale)
@@ -180,6 +319,9 @@ print("Wrote:")
 
 render(barWidth, barHeight, scale: 1, to: "\(assets)/MenuBarIcon.png", drawMenuBarGlyph)
 render(barWidth, barHeight, scale: 2, to: "\(assets)/MenuBarIcon@2x.png", drawMenuBarGlyph)
+
+render(dmgWidth, dmgHeight, scale: 1, to: "\(assets)/DmgBackground.png", drawDmgBackground)
+render(dmgWidth, dmgHeight, scale: 2, to: "\(assets)/DmgBackground@2x.png", drawDmgBackground)
 
 if let iconset = flag("--iconset") {
     guard let art = NSImage(contentsOfFile: iconArt) else { die("source artwork not found: \(iconArt)") }

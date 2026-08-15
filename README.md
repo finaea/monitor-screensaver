@@ -46,18 +46,28 @@ cd MonitorScreenSaver
 
 Needs the .NET 9 SDK to build. Nothing to install to run.
 
-On **macOS** there is no release build yet, so build it yourself:
+On **macOS**, build it yourself:
 
 ```bash
 git clone <this repo>
 cd MonitorScreenSaver
 tools/bundle-macos.sh              # produces ./publish/MonitorScreenSaver.app
+tools/make-dmg.sh                  # optional: wraps it in a release .dmg
 open publish/MonitorScreenSaver.app
 ```
 
-Pass `osx-x64` for an Intel build (`tools/bundle-macos.sh osx-x64`). The bundle is ad-hoc
-signed, which is fine on the machine that built it — on any other Mac Gatekeeper will refuse
-the first launch, so right-click → **Open** once. See [macOS](#macos) below.
+Pass `osx-x64` for an Intel build (`tools/bundle-macos.sh osx-x64`); there is no universal
+build, because `lipo` cannot merge two single-file .NET executables. Drag the app to
+**Applications** rather than running it from Downloads — *Start at login* records the
+bundle's absolute path, and an app left in Downloads is also liable to App Translocation,
+which runs it from a randomised temporary mount.
+
+The bundle is ad-hoc signed, which is fine on the machine that built it. On any other Mac
+Gatekeeper refuses the first launch, and since macOS Sequoia right-click → **Open** no
+longer bypasses it: open **System Settings → Privacy & Security**, scroll to *Security* at
+the bottom, click **Open Anyway**, authenticate, then launch it again and click **Open**.
+Or skip all of that with `xattr -dr com.apple.quarantine /Applications/MonitorScreenSaver.app`.
+Signing properly needs a $99/year Developer ID; see [macOS](#macos) below.
 
 ---
 
@@ -141,6 +151,29 @@ more checks, since several sections run per display. `watch` logs every
 power, display-topology and lock transition with a heartbeat of everything the engine reads.
 `hotkey` holds the shortcut and prints every press without blanking anything, which is how to
 tell "not registered" apart from "registered, but something else is eating the keystroke".
+
+### Packaging a release
+
+`tools/make-dmg.sh` turns `publish/MonitorScreenSaver.app` into a disk image with the app,
+an `/Applications` symlink and a background poster, one file per architecture.
+
+A zip would be smaller (38 MB against 43 MB) and build in two seconds rather than twenty,
+and neither format changes anything about Gatekeeper — quarantine propagates through both.
+The disk image is chosen for where the app ends up: the `/Applications` symlink makes the
+Finder drag the obvious move, which both keeps *Start at login* pointing at a path that
+still exists and clears App Translocation.
+
+Everything cosmetic about that window — its size, the icon positions, the background — is
+stored in a `.DS_Store` that only Finder can write, so the script mounts a read-write image
+and drives Finder over AppleScript to produce it. The background itself comes from
+`tools/make-mac-icons.swift`; the two hold one shared layout, so icon coordinates have to
+move together.
+
+The poster's colours are not a free choice. Finder draws icon labels with no shadow or
+plate behind them and gives `.DS_Store` no say in their colour, so the strip they land on
+is held at the one luminance that clears 4.5:1 against black *and* white text. On macOS
+26.6 the ink measured dark in both appearances, but Apple has never documented that, so the
+background does not bet on it.
 
 ---
 
