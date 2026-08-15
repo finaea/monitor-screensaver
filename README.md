@@ -384,3 +384,9 @@ Exit code 0 means everything passed. If you're filing an issue, attach that file
 How it decides what counts as activity, why the overlay is built the way it is, what was
 actually measured on the lock screen, and the traps found along the way:
 **[TECHNICAL.md](TECHNICAL.md)**.
+
+---
+
+## License
+
+[MIT](LICENSE).
