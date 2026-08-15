@@ -246,14 +246,15 @@ powercfg /requests
 
 ### Blacklisting a holder
 
-You can blacklist a selected process/app to prevent it to hold the display:
+You can blacklist a selected process/app to prevent it to hold the display. It's done in the
+**settings window**: every holder row has a **Blacklist** button, and a **Blacklisted**
+section underneath lists what you've blacklisted with an **Unblacklist** button each — so
+you can also remove an entry for something that isn't running right now.
 
-- **Tray menu** — click a holder in the list to blacklist it.
-- **Settings window** — every holder row has a **Blacklist** button.
-
-A blacklisted app still shows in the holder list, just grayed out and tagged `blacklisted`,
-and a **Blacklisted** section appears underneath — click an entry there (or **Unblacklist**
-in the settings window) to undo it at any time.
+The **tray menu** only reports. A blacklisted app still shows in its holder list, greyed out
+and tagged `blacklisted`, but nothing in that list is clickable: it used to be, and the
+result was the same process appearing twice — once greyed as live status, once bright
+underneath as a remove button — which just read as a duplicate.
 
 
 One catch: matching a request to an app name needs the same admin-only `powercfg /requests`

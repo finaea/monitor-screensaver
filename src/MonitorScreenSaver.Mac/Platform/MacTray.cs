@@ -9,10 +9,16 @@ namespace MonitorScreenSaver.Mac;
 ///
 ///   MonitorScreenSaver — status header (live countdown while the menu is open)
 ///   ─────
-///   Holding display awake (n)     inline holder list, click to blacklist,
-///   …                             blacklisted section underneath, click to remove
+///   Holding display awake (n)     inline holder list, read-only: blacklisted holders
+///   …                             are dimmed, nothing here is actionable
 ///   ─────
 ///   Blank now / Pause blanking / Settings… / Start at login / Quit
+///
+/// The holder list reports; it does not configure. Blacklisting and un-blacklisting both
+/// live in the settings window, which has room for a button per row and a list of the
+/// blacklist itself (SettingsWindow.axaml "BlacklistPanel"). The menu used to carry both,
+/// and the result was the same process appearing twice — once dimmed in the holder list as
+/// live status, once bright underneath as a remove button — which read as a duplicate.
 ///
 /// Rendering is native NSMenu — macOS menus cannot be custom-painted, and shouldn't
 /// be. The elevation rows from Windows ("names need admin", "Restart elevated") have
@@ -145,25 +151,19 @@ public sealed unsafe class MacTray : IDisposable
 
         var insertAt = ObjC.SendNInt(_menu, ObjC.Sel("indexOfItem:"), _requestersHeader) + 1;
 
-        void Add(string title, Action? handler, bool blacklistedLook = false)
+        // Every row here is inert. `dimmed` is the only thing that varies, and it cannot be
+        // expressed any other way: AppKit greys the title of any disabled menu item, and an
+        // attributedTitle carrying an explicit labelColor is greyed identically (measured —
+        // enabled/plain, disabled/plain and disabled/attributed render the same three greys).
+        // So a row that must stay at full contrast has to remain *enabled*, and the most that
+        // can be done is to give it no action, which is why these pass a null handler and then
+        // undo the disabling MakeItem applies to handler-less items.
+        void Add(string title, bool dimmed)
         {
-            var item = MakeItem($"{title}", handler, indent: 1);
-            if (blacklistedLook) ObjC.SendVoid(item, ObjC.Sel("setEnabled:"), false);
+            var item = MakeItem(title, null, indent: 1);
+            if (!dimmed) ObjC.SendVoid(item, ObjC.Sel("setEnabled:"), true);
             ObjC.SendVoid(_menu, ObjC.Sel("insertItem:atIndex:"), item, (IntPtr)insertAt++);
             _dynamicItems.Add(item);
-        }
-
-        void AddBlacklistSection()
-        {
-            if (_app.Settings.BlacklistedRequesters.Count == 0) return;
-
-            Add("Blacklisted — click to remove", null, blacklistedLook: true);
-
-            foreach (var name in _app.Settings.BlacklistedRequesters.ToList())
-            {
-                var n = name;
-                Add(n, () => _app.Unblacklist(n));
-            }
         }
 
         var snapshot = _app.Requesters;
@@ -172,8 +172,7 @@ public sealed unsafe class MacTray : IDisposable
         {
             // Should not happen on macOS (attribution needs no rights); surface it
             // rather than pretending the list is empty.
-            Add($"Unavailable — {snapshot.Unavailable}", null, blacklistedLook: true);
-            AddBlacklistSection();
+            Add($"Unavailable — {snapshot.Unavailable}", dimmed: true);
             SetTitle(_requestersHeader, "Holding display awake");
             return;
         }
@@ -183,7 +182,7 @@ public sealed unsafe class MacTray : IDisposable
         var active = display.Count - ignored;
 
         if (display.Count == 0)
-            Add("None", null, blacklistedLook: true);
+            Add("None", dimmed: true);
 
         foreach (var r in display)
         {
@@ -193,18 +192,8 @@ public sealed unsafe class MacTray : IDisposable
                 ? $"{r.ShortName}   [{r.Kind}]"
                 : $"{r.ShortName}   [{r.Kind}] — {r.Reason}";
 
-            if (isIgnored)
-            {
-                Add($"{label}   · blacklisted", null, blacklistedLook: true);
-            }
-            else
-            {
-                var name = r.ShortName;
-                Add(label, () => _app.Blacklist(name));
-            }
+            Add(isIgnored ? $"{label}   · blacklisted" : label, dimmed: isIgnored);
         }
-
-        AddBlacklistSection();
 
         SetTitle(_requestersHeader, (active, ignored) switch
         {

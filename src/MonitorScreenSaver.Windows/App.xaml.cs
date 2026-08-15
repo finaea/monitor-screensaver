@@ -290,25 +290,6 @@ public partial class App : System.Windows.Application
         var insert = start;
         void Add(Forms.ToolStripItem item) => _menu.Items.Insert(insert++, item);
 
-        void AddBlacklistSection()
-        {
-            if (_settings.BlacklistedRequesters.Count == 0) return;
-
-            Add(new Forms.ToolStripSeparator());
-            Add(new Forms.ToolStripMenuItem("Blacklisted — click to remove") { Enabled = false });
-
-            foreach (var name in _settings.BlacklistedRequesters)
-            {
-                var item = new Forms.ToolStripMenuItem($"      {name}")
-                {
-                    ToolTipText = $"Remove {name} from the blacklist",
-                };
-                var n = name;
-                item.Click += (_, _) => Unblacklist(n);
-                Add(item);
-            }
-        }
-
         var exec = _engine.Status.Exec;
 
         if (!_requesters.Available)
@@ -324,8 +305,6 @@ public partial class App : System.Windows.Application
             Add(new Forms.ToolStripMenuItem($"      Names need admin — {reason}") { Enabled = false });
             Add(new Forms.ToolStripMenuItem("      Restart elevated to see names", null,
                 (_, _) => RelaunchElevated()));
-
-            AddBlacklistSection();
 
             _requestersHeader.Text = exec.DisplayRequired
                 ? "Holding display awake  ●"
@@ -352,19 +331,13 @@ public partial class App : System.Windows.Application
 
             if (isIgnored) label += "   · blacklisted";
 
-            var item = new Forms.ToolStripMenuItem(label) { Enabled = !isIgnored };
-
-            if (!isIgnored)
-            {
-                var name = r.ShortName;
-                item.ToolTipText = $"Blacklist {name} — its requests will no longer keep the display awake";
-                item.Click += (_, _) => Blacklist(name);
-            }
-
-            Add(item);
+            // Read-only, exactly as on macOS: blacklisted holders are dimmed, active ones
+            // stay at full contrast, and neither does anything when clicked. Blacklisting is
+            // the config window's job (ConfigWindow.xaml "BlacklistPanel") — it has a button
+            // per row and the blacklist itself, so the menu no longer listed the same process
+            // twice for two different reasons.
+            Add(new Forms.ToolStripMenuItem(label) { Enabled = !isIgnored });
         }
-
-        AddBlacklistSection();
 
         _requestersHeader.Text = (active, ignored) switch
         {

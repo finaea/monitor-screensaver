@@ -367,6 +367,26 @@ Anything marked *(spike)* still needs a proof-of-concept before it counts as fac
     when `SIGN_IDENTITY` is set, untested), and `CFBundleShortVersionString` is still
     hardcoded to 1.1.0 in `bundle-macos.sh`, which is what names the `.dmg`.
 
+- **2026-08-15 — The tray holder list is read-only now, on both heads.** Reported from use:
+  a blacklisted process appeared twice in the menu, once greyed and once not. Both rows were
+  intentional and meant different things — the greyed one was live status in the holder list,
+  the bright one was a remove button in the `Blacklisted — click to remove` section
+  underneath — but as two rows carrying the same process name they read as a duplicate.
+  The blacklist section is gone from both menus; the holder list stays, dimmed when
+  blacklisted, and nothing in it is clickable. Blacklisting and un-blacklisting were already
+  fully covered by the settings windows (a button per holder row plus a `BlacklistPanel`
+  listing the blacklist itself), so nothing was stranded — including entries for processes
+  that are not currently running, which the menu could never have removed anyway.
+  - **AppKit forces a compromise on the "inert but not greyed" rows.** It greys the title of
+    any disabled `NSMenuItem`, and an `attributedTitle` carrying an explicit `labelColor`
+    is greyed identically — measured by popping a menu with enabled/plain, disabled/plain
+    and disabled/attributed rows and screenshotting: the last three render the same grey.
+    So a row cannot be both full-contrast and unclickable. Active holders stay *enabled*
+    with no action, which is inert in effect but will still highlight under the cursor.
+    The alternative was greying every holder, which loses the distinction the whole change
+    is about. A custom `NSMenuItem.view` would fix it properly and is not worth the AppKit
+    view plumbing in a codebase that talks to the runtime through `objc_msgSend` by hand.
+
 ---
 
 ## TL;DR
