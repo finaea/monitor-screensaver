@@ -55,9 +55,11 @@ blanked until the jiggling stops — the first pause arms the hold, and the next
 It is the same shape as the Windows overlay's 400 ms `SettleTime`, which ignores the mouse
 traffic caused by a window appearing under the cursor.
 
-The 500 ms is exercised by a fake-clock check in the mac self-test (`ManualBlankHold`) covering
+The 500 ms is exercised by a fake-clock check in **both** self-tests (`ManualBlankHold`) covering
 press, key release, ragged modifier releases, a three-second hold, the settle, and a real wake —
-which fails on the old behaviour, so it is a regression test rather than a description.
+which fails on the old behaviour, so it is a regression test rather than a description. It is
+shared Core logic that both heads ship, so it is checked from both rather than from whichever
+head happened to find the bug.
 
 ---
 
@@ -282,7 +284,7 @@ What each seam binds to:
 | Tray | `NotifyIcon` + custom-drawn menu | `NSStatusItem` + native `NSMenu` |
 | Settings window | WPF | Avalonia, same tokens and layout |
 | Start at login | `Run` key / logon task | `SMAppService` (launchd) |
-| Blank-now shortcut | `RegisterHotKey` (**not built yet**) | Carbon `RegisterEventHotKey` |
+| Blank-now shortcut | `RegisterHotKey` | Carbon `RegisterEventHotKey` |
 
 Six things that cost real time, kept here so nobody re-derives them:
 
@@ -323,11 +325,78 @@ CFRunLoop, so one loop pumps the engine timer, the status item and the settings 
 also initialised lazily on the first *Settings…*, so a session that never opens settings never
 loads a UI framework at all.
 
-### The blank-now shortcut
+---
+
+## The blank-now shortcut
 
 `Core/Hotkey.cs` holds the portable half — a `HotkeySpec` stored as text
 (`"Ctrl+Alt+Shift+B"`, keys as *names* so one settings value means the same keystroke on both
-platforms) and the `IGlobalHotkey` seam. `Platform/MacHotkey.cs` implements it on Carbon
+platforms), the shape rules, and the `IGlobalHotkey` seam. Each head registers it with its own
+API, and on the question that matters — *is this combination already taken?* — the two
+platforms are near-exact opposites:
+
+| | Windows | macOS |
+|---|---|---|
+| API | `RegisterHotKey` | Carbon `RegisterEventHotKey` |
+| Another process already holds it | **says so** — fails, `GetLastError` = 1409 | **silent** — returns `noErr` |
+| Where conflict detection lives | mostly in the registration | entirely in four pre-flight layers |
+
+The default is `Ctrl+Alt+Shift+B` (⌃⌥⇧B): three modifiers and no Command/Windows key is the one
+shape that is out of the way on both platforms, since app menus are built from Command (macOS)
+and Ctrl/Ctrl+Shift (Windows), and the Windows key belongs to the shell.
+
+### On Windows
+
+`Platform/WindowsHotkey.cs`. `RegisterHotKey` needs a window to post `WM_HOTKEY` to, and the
+documentation is explicit that it "fails if you try to associate a hot key with a window created
+by another thread" — so the class owns a hidden 0×0 `HwndSource` created on the UI thread, the
+same shape `SystemEventSink` uses for `WM_POWERBROADCAST`. `MOD_NOREPEAT` is set: *blank now* is
+an edge, not a level, and without it holding the shortcut posts a message every auto-repeat
+interval.
+
+Because the registration is authoritative here, `Blocker` only covers what registration cannot
+report:
+
+1. **Shape** (`HotkeySpec.Weakness`, shared with the mac head).
+2. **The Windows key.** `MOD_WIN` is accepted by the API, but the documentation is unambiguous
+   that "keyboard shortcuts that involve the WINDOWS key are reserved for use by the operating
+   system", so a spec carrying `Command` (what the mac head stores for ⌘) is refused rather than
+   registered into a fight with the shell.
+3. **A hand-written conventions list** — Ctrl+Shift+T (reopen closed tab), Ctrl+Shift+I (dev
+   tools), Ctrl+Shift+B (build), and so on. These register perfectly well; they are refused
+   because a global hot key *outranks the focused app*, so taking one does not clash, it
+   silently removes that shortcut from every application on the machine. Hand-written for the
+   same reason as the mac list: nothing enumerates it.
+
+Everything past that is settled by the registration, and the settings window reports the answer
+rather than guessing at it. The recorder therefore differs from the mac one in a way worth
+knowing: since a clash only surfaces *after* trying, a combination that fails to register is
+rolled back to whatever was working before, so settings never keeps a shortcut that would
+silently never fire.
+
+> **The overlay is a second cancel path, and "it never has focus" turned out to be untrue.**
+> `OverlayWindow` raises `WakeRequested` from `PreviewKeyDown`, which calls `NoteActivity` and
+> clears the manual blank — bypassing the settle window in `BlankingEngine` entirely, because it
+> never looks at the input tick. The assumption that made this safe was that keystrokes go to the
+> foreground window and an overlay is never it (`WS_EX_NOACTIVATE` + `ShowActivated=false`).
+> Measured, that assumption does not hold: `GetForegroundWindow` returned an overlay's own handle
+> on some self-test runs and not others, because when the previous foreground window is destroyed
+> the system hands the foreground to a non-activating topmost window rather than to nothing.
+> Those two flags are the whole of what an app can do about it, so the fix is downstream —
+> `OverlayWindow` ignores auto-repeat key-downs (`KeyEventArgs.IsRepeat`), which is the only way
+> a *held* shortcut can reach it. A fresh keypress still wakes, which is the point of a
+> screensaver. The self-test reports the foreground observation rather than asserting on it,
+> since it varies by environment and the app does not control it.
+>
+> Related trap, for whoever measures this next: WPF's `IsActive` is not the question. An overlay
+> created straight after another was destroyed reports `IsActive=true` *and*
+> `IsKeyboardFocusWithin=true` with `Keyboard.FocusedElement` set to itself, while the window
+> manager still has the foreground somewhere else entirely. That is in-process bookkeeping and it
+> delivers nothing — no `WM_KEYDOWN` reaches a process that is not in front.
+
+### On macOS
+
+`Platform/MacHotkey.cs` implements it on Carbon
 `RegisterEventHotKey`, which is deprecated, still what every menu bar app uses, and the only
 route that needs no Accessibility grant: an `NSEvent` global monitor cannot consume the
 keystroke, and a `CGEventTap` requires the user to grant Accessibility in System Settings.
@@ -335,10 +404,9 @@ keystroke, and a `CGEventTap` requires the user to grant Accessibility in System
 **What macOS will and will not tell you.** Measured on 26.6 with a throwaway C harness, not
 assumed: `RegisterEventHotKey` returns `noErr` for ⌘Space (Spotlight), ⌘Tab, ⌘Q and ⌘⇧4, and
 `noErr` again when a *different process* already holds the same combination. The only clash it
-reports is a duplicate inside the same process (`eventHotKeyExistsErr`, −9878). Windows is the
-opposite: `RegisterHotKey` is documented to fail for a combination already registered, with
-`GetLastError` = 1409 `ERROR_HOTKEY_ALREADY_REGISTERED`. So a successful registration is not
-evidence of anything here, and conflict detection has to happen in four layers before it:
+reports is a duplicate inside the same process (`eventHotKeyExistsErr`, −9878). So a successful
+registration is not evidence of anything here, and conflict detection has to happen in four
+layers before it:
 
 1. **Shape** (`HotkeySpec.Weakness`, portable) — at least two modifiers, and Control or
    Option among them. Command/Shift combinations are what macOS menus are built from, and
@@ -479,7 +547,8 @@ cache by path. `killall Dock` settles it.
 MonitorScreenSaver.exe --selftest report.txt
 ```
 
-Headless — no tray, no windows, no engine. 103 checks covering:
+Headless — no tray, no windows, no engine. 136 checks on a three-display machine (several
+sections run per display, so the count goes up with more attached), covering:
 
 - WPF text layout forced through every font family the UI uses, in both formatting modes,
   plus every Theme.xaml brush and style (this is what catches globalization/font regressions
@@ -494,8 +563,15 @@ Headless — no tray, no windows, no engine. 103 checks covering:
 - the WASAPI audio probe: endpoint enumeration plus a live peak reading through the same
   interop the audio-activity option uses
 - power-request detection through **both** the legacy and modern APIs
+- the blacklist decision (`BlacklistCovers`) against synthetic holder snapshots — synthetic
+  rather than live because attribution needs elevation here, so a live version would silently
+  not run for most people, which is exactly when a regression would ship
 - idle arithmetic including the 32-bit `GetLastInputInfo` tick wrap
 - the `powercfg /requests` parser
+- the blank-now shortcut: the shape rules, virtual-key mapping, a live registration, and the
+  clash Windows reports and macOS cannot — taking the same combination twice must be refused
+  with 1409, and releasing it must actually free it
+- the manual-blank hold on a fake clock (shared Core logic, checked from both heads)
 - settings round-trip, per-display config resolution, and autostart queries
 
 Exit code 0 = all passed.
@@ -664,6 +740,7 @@ src/MonitorScreenSaver.Windows/         net9.0-windows — the WPF head
   Platform/OverlayWindow.cs   one non-activating topmost window: black, dim or video
   Platform/DisplayEnumerator.cs  monitor enumeration + EDID friendly names
   Platform/SystemEventSink.cs sleep / hotplug / lock notifications
+  Platform/WindowsHotkey.cs   RegisterHotKey + the conflict checks it still needs
   Platform/AudioActivity.cs   WASAPI endpoint peak meters
   Platform/SelfTest.cs        headless diagnostics (--selftest)
   Platform/WatchMode.cs       display-power transition logger (--watch)

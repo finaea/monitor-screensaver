@@ -9,4 +9,6 @@ global using Button = System.Windows.Controls.Button;
 global using RadioButton = System.Windows.Controls.RadioButton;
 global using Cursors = System.Windows.Input.Cursors;
 global using MouseEventArgs = System.Windows.Input.MouseEventArgs;
+global using KeyEventArgs = System.Windows.Input.KeyEventArgs;
+global using KeyEventHandler = System.Windows.Input.KeyEventHandler;
 global using Point = System.Windows.Point;

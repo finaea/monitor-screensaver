@@ -57,9 +57,12 @@ public partial class App : System.Windows.Application
     private OverlayManager _overlays = null!;
     private SystemEventSink _events = null!;
 
+    private WindowsHotkey _hotkey = null!;
+
     private Forms.NotifyIcon _tray = null!;
     private Forms.ContextMenuStrip _menu = null!;
     private Forms.ToolStripMenuItem _headerItem = null!;
+    private Forms.ToolStripMenuItem _blankItem = null!;
     private Forms.ToolStripMenuItem _pauseItem = null!;
     private Forms.ToolStripMenuItem _requestersHeader = null!;
     private Forms.ToolStripSeparator _requestersEnd = null!;
@@ -77,6 +80,7 @@ public partial class App : System.Windows.Application
     internal OverlayManager Overlays => _overlays;
     internal SystemEventSink Events => _events;
     internal PowerSnapshot Requesters => _requesters;
+    internal WindowsHotkey Hotkey => _hotkey;
 
     internal event Action? RequestersUpdated;
 
@@ -145,6 +149,11 @@ public partial class App : System.Windows.Application
         _events = new SystemEventSink();
         _events.Event += OnSystemEvent;
 
+        // Blanking from the keyboard. Deliberately not fatal: a shortcut that could not be
+        // taken leaves the tray item as the way to blank, and the settings window explains why.
+        _hotkey = new WindowsHotkey(() => _engine.BlankNow());
+        ApplyHotkey();
+
         BuildTray();
 
         _watchdog = new DispatcherTimer(DispatcherPriority.Background)
@@ -185,7 +194,7 @@ public partial class App : System.Windows.Application
 
         _pauseItem = new Forms.ToolStripMenuItem("Pause blanking", null, (_, _) => TogglePause());
 
-        var blankNow = new Forms.ToolStripMenuItem("Blank now", null, (_, _) => _engine.BlankNow());
+        _blankItem = new Forms.ToolStripMenuItem("Blank now", null, (_, _) => _engine.BlankNow());
 
         _startupItem = new Forms.ToolStripMenuItem("Start with Windows", null, (_, _) => ToggleStartup())
         {
@@ -201,7 +210,7 @@ public partial class App : System.Windows.Application
             new Forms.ToolStripSeparator(),
             _requestersHeader,
             _requestersEnd,
-            blankNow,
+            _blankItem,
             _pauseItem,
             new Forms.ToolStripSeparator(),
             settings,
@@ -260,6 +269,15 @@ public partial class App : System.Windows.Application
     private void UpdateMenu()
     {
         RenderMenuStatus(_engine.Status);
+
+        // The shortcut goes in the title rather than in ShortcutKeys: that property is a real
+        // accelerator for a menu attached to a form, which this menu is not, so it would
+        // render an advertisement for a key that does nothing. The global hot key
+        // (WindowsHotkey) is what actually fires it. Shown only while it is genuinely held,
+        // so the menu never promises a shortcut that was refused.
+        _blankItem.Text = _hotkey.Status is { State: HotkeyState.Active } && _settings.BlankNowHotkeySpec is { } spec
+            ? $"Blank now   {spec}"
+            : "Blank now";
 
         _startupItem.Checked = AutoStart.IsEnabled;
 
@@ -403,6 +421,22 @@ public partial class App : System.Windows.Application
 
         _settings.StartWithWindows = enable;
         _settings.Save();
+    }
+
+    /// <summary>
+    /// (Re)takes the configured shortcut. Called at launch and whenever the settings window
+    /// changes it. Logs a refusal rather than surfacing it here — the settings window shows
+    /// <see cref="WindowsHotkey.Status"/>, which is where someone can act on it.
+    /// </summary>
+    internal HotkeyStatus ApplyHotkey()
+    {
+        var status = _hotkey.Apply(_settings.BlankNowHotkeySpec);
+
+        if (status.State is HotkeyState.Blocked or HotkeyState.Failed)
+            CrashLog.Write("App.ApplyHotkey", new InvalidOperationException(
+                $"{_settings.BlankNowHotkey}: {status.Detail}"));
+
+        return status;
     }
 
     internal void RelaunchElevated()
@@ -561,6 +595,7 @@ public partial class App : System.Windows.Application
         try
         {
             _watchdog?.Stop();
+            _hotkey?.Dispose();
             _engine?.Dispose();
             _overlays?.Dispose();
             _events?.Dispose();

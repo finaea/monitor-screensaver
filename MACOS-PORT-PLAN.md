@@ -387,6 +387,65 @@ Anything marked *(spike)* still needs a proof-of-concept before it counts as fac
     is about. A custom `NSMenuItem.view` would fix it properly and is not worth the AppKit
     view plumbing in a codebase that talks to the runtime through `objc_msgSend` by hand.
 
+- **2026-08-15 — Windows caught up, and the Phase 1 gate is finally closed.** Everything the
+  mac work added that was portable had left the Windows head behind. Run on the real machine
+  (Windows 11 26200, 3 displays, unelevated).
+  - **`--selftest` passes on Windows: 136 checks, exit 0**, four runs, stable. This is the gate
+    that had been open since the Phase 1 split — "the Windows `--selftest` has never been run on
+    a real Windows machine" — and it passed unmodified at 103 checks *before* anything here was
+    added, so the split itself never regressed the Windows head. The whole solution, mac project
+    included, also builds clean on Windows (`dotnet build`, 0 warnings): the mac head is plain
+    `net9.0` P/Invoke, so it compiles anywhere even though it only runs on macOS.
+  - **The blank-now shortcut now exists on Windows** (`Platform/WindowsHotkey.cs`), which was the
+    one feature the shared settings file promised and only one head delivered —
+    `AppSettings.BlankNowHotkey` has defaulted to `Ctrl+Alt+Shift+B` since the Core work, and
+    Windows had been persisting it and ignoring it. `RegisterHotKey` against a hidden
+    `HwndSource`, `MOD_NOREPEAT`, plus the tray item showing the combination while it is held and
+    a recorder card in the settings window that mirrors the mac one card-for-card.
+  - **The conflict story is the mirror image of macOS, and that shapes the code.** Registration is
+    authoritative here (1409 `ERROR_HOTKEY_ALREADY_REGISTERED`), so `Blocker` is thin — shape,
+    the Windows key, and a hand-written conventions list — and the settings window *rolls back* a
+    combination the OS refuses instead of pre-flighting four layers deep. Proved rather than
+    assumed: the selftest takes `Ctrl+Alt+Shift+F19` twice and requires the second to fail with
+    1409, then requires it to be free again after release.
+  - **The overlay's `PreviewKeyDown` cancel path was flagged in the 2026-08-15 note above as
+    "worth checking there when the shortcut lands". It was checked, and it was a real hazard.**
+    The plan assumed it was harmless because an overlay never has focus. That assumption is
+    false. Two measurements, in order, because the first one misled:
+    - Asserting `!win.IsActive` failed *deterministically* on the second of three overlays, every
+      run — WPF reported `IsActive=true` and `IsKeyboardFocusWithin=true` with
+      `Keyboard.FocusedElement` being the overlay, for a window created straight after another was
+      destroyed. That one is a red herring: it is in-process bookkeeping and delivers nothing.
+      `IsActive` is not a safe proxy for "can receive keystrokes" on a `WS_EX_NOACTIVATE` window.
+    - `GetForegroundWindow` is the real question, and it returned the overlay's own handle on
+      **some runs and not others** (1 of 4 on the final build). So the system does hand the
+      foreground to a non-activating topmost window when the previous holder has just been
+      destroyed, and `WS_EX_NOACTIVATE` + `ShowActivated=false` are the whole of what the app can
+      do about it.
+    - Consequence: a foreground overlay receives the auto-repeat `WM_KEYDOWN` stream of a *held*
+      blank-now shortcut, and waking on it would cancel the blank it just asked for — the mac
+      bug, arriving on Windows by a path that bypasses `ManualBlankSettleMs` entirely, since
+      `WakeRequested` calls `NoteActivity` and never consults the settle. Fixed downstream:
+      `OverlayWindow` ignores `KeyEventArgs.IsRepeat`. A fresh keypress still wakes, which is what
+      a screensaver is for. The selftest *reports* the foreground observation instead of asserting
+      it, because it varies by environment and asserting would only make the suite flake.
+  - **The 600 ms delay on the settings window's *Blank now* is gone** — it predates
+    `BlankingEngine.ManualBlankSettleMs` and was the papering-over that the settle window
+    replaced, exactly as on macOS. It was also inconsistent with the Windows *tray* item, which
+    has always fired instantly.
+  - **Self-test parity, where the concept exists on both.** Windows gained the fake-clock
+    `ManualBlankHold` (shared Core logic with a known shipped bug, previously tested from one head
+    only), the blacklist decision (`BlacklistCovers`, previously untested here — synthetic
+    snapshots rather than live, because attribution needs elevation on Windows and a live version
+    would silently skip for most people), three display assertions the mac side already had, and
+    the hotkey section. Also fixed: a report-write failure message was appended to a local string
+    nothing read again, so it was discarded instead of reported.
+  - Still Windows-only-missing, deliberately: no `hotkey` diagnostic command. The mac one exists
+    because a macOS registration proves nothing about delivery; on Windows a failed registration
+    is reported, so the same command would mostly restate what the selftest already checks. The
+    residual case it *would* catch is a `WH_KEYBOARD_LL` hook in another process swallowing the
+    keystroke ahead of us — rare enough to wait for someone to actually hit it.
+
 ---
 
 ## TL;DR

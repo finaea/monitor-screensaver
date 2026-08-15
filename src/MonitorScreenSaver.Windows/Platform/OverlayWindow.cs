@@ -87,7 +87,18 @@ public sealed class OverlayWindow : Window, IOverlayWindow
         PreviewMouseMove += OnMouseMove;
         PreviewMouseDown += (_, _) => Wake();
         PreviewMouseWheel += (_, _) => Wake();
-        PreviewKeyDown += (_, _) => Wake();
+
+        // Fresh key-downs only. An overlay is normally never the foreground window
+        // (WS_EX_NOACTIVATE + ShowActivated=false), but that is not absolute: when the
+        // previous foreground window is destroyed the system will hand the foreground to a
+        // non-activating topmost window rather than to nothing, which the self-test catches
+        // happening on some runs and not others. While it holds the foreground it receives
+        // the auto-repeat WM_KEYDOWN stream of any key being held — including the blank-now
+        // shortcut that just asked for this overlay. Waking on that would cancel the blank
+        // for as long as the user kept their finger down, which is the exact bug
+        // BlankingEngine.ManualBlankSettleMs exists to prevent, arriving by a path that
+        // bypasses it (WakeRequested calls NoteActivity, which never consults the settle).
+        PreviewKeyDown += (_, e) => { if (!e.IsRepeat) Wake(); };
     }
 
     // ------------------------------------------------------------------ video

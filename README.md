@@ -84,9 +84,20 @@ in the screenshot above.
 | **Idle timeout** | How long before the picked monitors go black. 1 / 3 / 5 / 10 / 30 min, or type your own. |
 | **Status** | Live: whether you're counted as awake, seconds until blanking, and which power requests are currently in force. |
 | **Blank now / Pause** | Blank immediately, or switch the whole thing off without quitting. |
+| **Blank now shortcut** | **Ctrl+Alt+Shift+B** by default, system-wide: blanks from wherever you are. Change it in *Settings → Blank now shortcut* (click the button, press the combination) or clear it there. |
 | **Start with Windows** | Registry `Run` key. Optionally **Start elevated** instead, which registers a logon task so you get admin from boot with no UAC prompt. |
 
-Blanking clears the instant you touch the keyboard or mouse, or switch windows.
+Blanking clears the instant you touch the keyboard or mouse, or switch windows — except right
+after you asked for it, since the keystroke or click that asked is itself input. The shortcut
+stays blanked while you hold it down; the next thing you press after letting go wakes the
+screens.
+
+The app refuses a shortcut it can see is taken, and the settings window says why: one modifier,
+Command/Shift-only, anything using the Windows key (Windows reserves that for itself), a
+combination near every app already uses like Ctrl+Shift+T, or one another program has already
+registered. What nothing can check is what a combination means *inside* another app, because a
+system-wide shortcut takes the keystroke before the app in front sees it — which is why the
+default carries three modifiers.
 
 > **Note:** set Windows' own *Turn off my screen after* (Settings → System → Power) to
 > something **longer than MonitorScreenSaver's idle timeout**, otherwise Windows powers your monitors
@@ -114,7 +125,7 @@ banner, no "Restart elevated", no logon task, and the holder list simply always 
 | **Video formats** | Plays what AVFoundation decodes: MP4/M4V/MOV/TS. **WMV, AVI, MKV and WebM do not work** — that is the one feature the Windows build has and this one doesn't. |
 | **Fonts** | No Segoe UI or Cascadia Mono on macOS, so the settings window uses San Francisco and SF Mono. Same sizes and layout, slightly different letterforms. |
 | **The Dock** | Opening the settings window puts the app in the Dock, which is what lets the window come to the front and take keystrokes; closing it takes the app back out, still running in the menu bar. Minimising leaves a Dock tile like any other window — click it to bring the window back. |
-| **Blank now shortcut** | **⌃⌥⇧B** by default, system-wide: blanks from wherever you are. Change it in *Settings → Blank now shortcut* (click the button, press the combination) or clear it there. macOS-only for now — the Windows build ignores the setting until its side is built. |
+| **Blank now shortcut** | Same feature, written **⌃⌥⇧B** — the Windows default `Ctrl+Alt+Shift+B` is the same keystroke, and the setting is one shared value. The difference is what the OS admits to: see below. |
 | **The cursor** | Hidden while the screens are blanked, because a lit arrow parked on a blanked OLED is the exact thing this app exists to prevent. That needs a private API — if a future macOS breaks it, blanking still works and the cursor just stays visible. |
 
 Set macOS's own display-sleep timer **longer** than the app's idle timeout
@@ -126,15 +137,12 @@ Two things macOS does *not* let any app cover: the **login/lock screen** (it bel
 `loginwindow`), and anything drawn above the screensaver window level by another app — a
 desktop-pet or overlay utility can float above the blanking overlay.
 
-About that shortcut: macOS will happily hand out a combination another app is already using
-and never mention it, so the app refuses combinations it *can* see a problem with — one
-modifier, Command/Shift-only, a macOS-reserved combination, or one you have assigned in
-System Settings → Keyboard → Shortcuts — and the settings window says which. What no OS can
-check is what a shortcut means *inside* another app, because a system-wide shortcut takes the
-keystroke before the app in front sees it. That is why the default carries three modifiers and
-no ⌘: almost nothing else lives there. If a shortcut turns out to be taken, the symptom is
-that nothing happens when you press it — pick another one, and blank from the menu bar
-meanwhile.
+About that shortcut: Windows tells you when another program already holds a combination, and
+macOS does not — it hands it out and never mentions it. So on macOS the app leans on what it
+can check up front (one modifier, Command/Shift-only, a macOS-reserved combination, or one you
+have assigned in System Settings → Keyboard → Shortcuts) and the settings window says which. If
+a combination turns out to be taken anyway, the symptom is that nothing happens when you press
+it — pick another one, and blank from the menu bar meanwhile.
 
 Diagnostics live on the binary inside the bundle:
 
@@ -334,7 +342,7 @@ There's also a built-in diagnostic that runs against your actual machine — dis
 enumeration, overlay placement, power-request detection, the lot:
 
 ```powershell
-MonitorScreenSaver.exe --selftest report.txt          # Windows, 103 checks
+MonitorScreenSaver.exe --selftest report.txt          # Windows, ~136 checks
 ```
 
 ```bash

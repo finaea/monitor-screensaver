@@ -31,6 +31,8 @@ public static class SelfTest
         AudioProbe();
         ParserCheck();
         LiveRequesterQuery();
+        HotkeyCheck();
+        ManualBlankHold();
         SettingsCheck();
 
         Line(new string('=', 78));
@@ -47,7 +49,9 @@ public static class SelfTest
             }
             catch (Exception ex)
             {
-                text += $"\n(could not write report: {ex.Message})";
+                // Line, not `text +=`: text is a local snapshot that nothing reads again,
+                // so appending to it discarded the message entirely.
+                Line($"(could not write report: {ex.Message})");
             }
         }
 
@@ -208,6 +212,9 @@ public static class SelfTest
 
             var ids = displays.Select(d => d.StableId).ToList();
             Check(ids.Distinct().Count() == ids.Count, "stable ids are unique (settings keys will not collide)");
+            Check(ids.All(id => !string.IsNullOrWhiteSpace(id)), "every display has a non-blank stable id");
+            Check(displays.Count(d => d.IsPrimary) == 1, $"exactly one display is primary ({displays.Count(d => d.IsPrimary)})");
+            Check(displays.All(d => d.Bounds.Width > 0 && d.Bounds.Height > 0), "every display has non-empty bounds");
         }
         catch (Exception ex)
         {
@@ -255,6 +262,27 @@ public static class SelfTest
                     var ex = Native.GetWindowLongPtr(hwnd, Native.GWL_EXSTYLE).ToInt64();
                     Check((ex & Native.WS_EX_NOACTIVATE) != 0, $"{d.FriendlyName}: WS_EX_NOACTIVATE set (will not steal focus)");
                     Check((ex & Native.WS_EX_TOOLWINDOW) != 0, $"{d.FriendlyName}: WS_EX_TOOLWINDOW set (kept out of Alt+Tab)");
+                    // Reported, not asserted. An overlay is supposed to stay out of the
+                    // foreground, and the two flags above are the whole of what the app can do
+                    // about it — but the system will still hand the foreground to a
+                    // non-activating topmost window when the previous holder has just been
+                    // destroyed, which is what this sequence does between displays. Measured
+                    // here: it happens on some runs and not others, so asserting on it makes
+                    // this suite flake rather than telling anyone anything.
+                    //
+                    // It is reported because it is the precondition for the one real hazard —
+                    // a foreground overlay receives the auto-repeat WM_KEYDOWN stream of a
+                    // held blank-now shortcut, and waking on that would cancel the blank it
+                    // just asked for. OverlayWindow ignores repeats for exactly this reason.
+                    //
+                    // WPF's IsActive is not the measure: an overlay created straight after
+                    // another was destroyed reports IsActive=true and IsKeyboardFocusWithin=true
+                    // while the window manager has the foreground somewhere else entirely.
+                    // That is in-process bookkeeping and it delivers nothing, since no
+                    // WM_KEYDOWN reaches a process that is not in front.
+                    if (Native.GetForegroundWindow() == hwnd)
+                        Line($"    NOTE: {d.FriendlyName}: the system gave this overlay the foreground " +
+                             "(expected on this create/destroy sequence; repeats are ignored so a held shortcut still holds)");
                     // Opaque overlays must stay opaque (cheap, hardware rendered), and must
                     // refuse an in-place switch to dim rather than silently no-op.
                     Check(!win.IsTranslucent, $"{d.FriendlyName}: true black uses an opaque window");
@@ -445,6 +473,57 @@ public static class SelfTest
         {
             Fail($"modern path threw: {ex.Message}");
         }
+
+        BlacklistDecision();
+    }
+
+    /// <summary>
+    /// The other half of Category 2: whether a held display request is *ignored* because
+    /// every holder is blacklisted (AppSettings.BlacklistCovers, shared Core logic, consumed
+    /// at BlankingEngine.Tick).
+    ///
+    /// Deliberately synthetic rather than live. Attribution needs elevation on Windows, so a
+    /// live-holder version of this check would silently not run for most people — which is
+    /// precisely when a blacklist regression would ship. The mac twin can be live because
+    /// IOKit attribution always works there (MacSelfTest.Category2Live).
+    ///
+    /// The rule under test is all-or-nothing: one unlisted holder is enough to keep honouring
+    /// the request, because the aggregate flag cannot be attributed any finer than "somebody".
+    /// </summary>
+    private static void BlacklistDecision()
+    {
+        try
+        {
+            PowerSnapshot Snapshot(params string[] display) => new(true, null,
+                [.. display.Select(n => new PowerRequester(RequesterKind.Process, $@"\Device\HarddiskVolume3\{n}", null, "DISPLAY"))]);
+
+            var one = Snapshot("parsecd.exe");
+            var two = Snapshot("parsecd.exe", "obs64.exe");
+
+            AppSettings Listing(params string[] names) => new() { BlacklistedRequesters = [.. names] };
+
+            Check(Listing("parsecd.exe").BlacklistCovers(one),
+                "blacklisting every current holder makes the engine ignore the aggregate flag");
+            Check(!Listing("parsecd.exe").BlacklistCovers(two),
+                "one unlisted holder is enough to keep honouring the request");
+            Check(Listing("parsecd.exe", "obs64.exe").BlacklistCovers(two),
+                "blacklisting both holders covers both");
+            Check(Listing("PARSECD.EXE").BlacklistCovers(one),
+                "blacklist matching ignores case");
+            Check(!new AppSettings().BlacklistCovers(one),
+                "an empty blacklist never covers a live holder");
+            Check(!Listing("parsecd.exe").BlacklistCovers(Snapshot()),
+                "no holders at all is not 'covered' (nothing to ignore)");
+
+            // Without attribution rights the snapshot carries no names, and guessing would
+            // blank through a request somebody is legitimately holding.
+            Check(!Listing("parsecd.exe").BlacklistCovers(new PowerSnapshot(false, "Requires administrator rights.", [])),
+                "an unavailable snapshot disables the blacklist rather than guessing");
+        }
+        catch (Exception ex)
+        {
+            Fail($"blacklist decision threw: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -611,6 +690,214 @@ public static class SelfTest
         {
             Fail($"threw: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// The blank-now shortcut, end to end against the real OS.
+    ///
+    /// The point of interest here is the mirror image of the mac head's problem. macOS returns
+    /// noErr when another process already holds a combination, so MacHotkey needs four
+    /// pre-flight layers and cannot trust its own registration. Windows documents the
+    /// opposite — RegisterHotKey "typically … fails if the keystrokes specified for the hot
+    /// key have already been registered for another hot key" — so the clash is provable, and
+    /// it is proved here rather than taken on trust: a second registration of a combination
+    /// this process already holds must come back refused.
+    /// </summary>
+    private static void HotkeyCheck()
+    {
+        Section("Blank now shortcut (global hot key)");
+
+        WindowsHotkey? first = null;
+        WindowsHotkey? second = null;
+
+        try
+        {
+            var configured = AppSettings.Load().BlankNowHotkey;
+            Line($"    configured: {configured ?? "(none)"}");
+
+            Check(string.IsNullOrWhiteSpace(configured) || HotkeySpec.TryParse(configured, out _),
+                "the stored shortcut parses (or is deliberately empty)");
+
+            first = new WindowsHotkey(() => { });
+
+            // Shape rules, from Core — the half that is identical on both heads.
+            void Refuses(string text, string why)
+            {
+                Check(HotkeySpec.TryParse(text, out var spec) && spec is not null && first!.Blocker(spec) is not null,
+                    $"refuses {text} ({why})");
+            }
+
+            Refuses("Ctrl+B", "one modifier is app-accelerator territory");
+            Refuses("Shift+Cmd+B", "Command and Shift alone are what app menus are built from");
+            Refuses("Ctrl+Alt+Shift+F12", "F12 belongs to the debugger at all times");
+            Refuses("Ctrl+Alt+Cmd+B", "Windows reserves the Windows key for the shell");
+            Refuses("Ctrl+Shift+T", "reopening a closed tab, in every browser");
+
+            Check(HotkeySpec.TryParse("Ctrl+Alt+Shift+B", out var ok) && ok is not null && first.Blocker(ok) is null,
+                "accepts the default Ctrl+Alt+Shift+B");
+
+            // Key name to virtual-key code. Contiguous ASCII ranges, so the ends are enough.
+            Check(WindowsKeyCodes.Code("A") == 0x41 && WindowsKeyCodes.Code("Z") == 0x5A, "letters map to VK 0x41-0x5A");
+            Check(WindowsKeyCodes.Code("0") == 0x30 && WindowsKeyCodes.Code("9") == 0x39, "digits map to VK 0x30-0x39");
+            Check(WindowsKeyCodes.Code("F1") == 0x70 && WindowsKeyCodes.Code("F20") == 0x83, "F-keys map to VK 0x70-0x83");
+            Check(WindowsKeyCodes.Code("Space") == 0x20, "Space maps to VK_SPACE");
+            Check(WindowsKeyCodes.Code("Tab") is null, "a key outside the allowed set has no code");
+
+            // Live registration. F19 is deliberately obscure: it exists as a virtual key on
+            // every Windows install but sits off the end of a normal keyboard, so nothing
+            // ships a shortcut on it and this cannot fight the user's real bindings.
+            HotkeySpec.TryParse("Ctrl+Alt+Shift+F19", out var spare);
+            var status = first.Apply(spare);
+            Check(status.State == HotkeyState.Active, $"registered {spare}: {status.State} — {status.Detail}");
+
+            if (status.State == HotkeyState.Active)
+            {
+                // The asymmetry with macOS, demonstrated. A second holder of the same
+                // combination is refused, and it is refused with the error that lets the
+                // settings window say so instead of guessing.
+                second = new WindowsHotkey(() => { });
+                var clash = second.Apply(spare);
+
+                Check(clash.State == HotkeyState.Failed, $"a second registration of {spare} is refused ({clash.State})");
+                Check(clash.Detail.Contains("already registered", StringComparison.OrdinalIgnoreCase),
+                    $"the refusal is attributed to the clash: {clash.Detail}");
+
+                // Releasing it must actually release it, or a settings change would burn the
+                // combination for the rest of the session.
+                first.Apply(null);
+                Check(first.Status.State == HotkeyState.Off, "clearing the shortcut unregisters it");
+
+                var retaken = second.Apply(spare);
+                Check(retaken.State == HotkeyState.Active, "the combination is free again once released");
+            }
+            else
+            {
+                Line("    NOTE: could not take the probe combination, so the clash-detection");
+                Line("          assertions are skipped for this run.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Fail($"threw: {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            try { first?.Dispose(); } catch { /* teardown */ }
+            try { second?.Dispose(); } catch { /* teardown */ }
+        }
+    }
+
+    /// <summary>
+    /// The manual-blank hold, driven by a fake clock so the sequence is exact and no display is
+    /// ever covered. This is the shipped bug it exists for: the shortcut blanked the screens and
+    /// they came straight back when the user lifted their finger, because the key *release* is
+    /// itself input and the hold was watching for input from the moment of the press.
+    ///
+    /// Portable logic (BlankingEngine.ManualBlankSettleMs), and the twin of the mac head's
+    /// ManualBlankHold — it is checked on both heads because it is shared code that both ship.
+    /// </summary>
+    private static void ManualBlankHold()
+    {
+        Section("Manual blank hold (engine logic, fake clock)");
+
+        try
+        {
+            var clock = new FakeClock();
+            var settings = new AppSettings { IdleTimeoutSeconds = 300, ManagedDisplayIds = ["x"] };
+
+            // The engine hands its tick to the timer factory, so the test can drive the
+            // decision itself instead of waiting on a real timer.
+            Action? tick = null;
+
+            using var engine = new BlankingEngine(settings, new EnginePlatform(
+                clock,
+                new FakeExec(),
+                new FakeFullscreen(),
+                new FakeAudio(),
+                _ => new FakeWatch(),
+                (_, action) => { tick = action; return new FakeTimer(); }));
+
+            // The keystroke that asks for the blank.
+            clock.Set(now: 1000, lastInput: 1000);
+            engine.BlankNow();
+            Check(engine.Status.Blanked, "blanks on request");
+
+            // Letting go of it, ~120 ms later. This is what used to unblank instantly.
+            clock.Set(now: 1120, lastInput: 1120);
+            tick!();
+            Check(engine.Status.Blanked, "still blanked when the shortcut key is released");
+
+            // …and its modifiers, in the usual ragged order.
+            clock.Set(now: 1180, lastInput: 1180);
+            tick!();
+            clock.Set(now: 1240, lastInput: 1240);
+            tick!();
+            Check(engine.Status.Blanked, "still blanked after the modifier keys are released");
+
+            // Someone holding the shortcut down for three seconds: input keeps arriving, and
+            // the hold must survive all of it.
+            for (ulong t = 1300; t <= 4300; t += 100)
+            {
+                clock.Set(now: t, lastInput: t);
+                tick!();
+            }
+            Check(engine.Status.Blanked, "still blanked after a three-second hold on the key");
+
+            // Quiet for the settle window: the hold now arms against the settled tick.
+            clock.Set(now: 4900, lastInput: 4300);
+            tick!();
+            Check(engine.Status.Blanked, "stays blanked once input goes quiet");
+
+            // Real input afterwards — the point of the whole feature — wakes it.
+            clock.Set(now: 5000, lastInput: 5000);
+            tick!();
+            Check(!engine.Status.Blanked, "real input after that wakes the displays");
+        }
+        catch (Exception ex)
+        {
+            Fail($"threw: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private sealed class FakeClock : IActivityClock
+    {
+        public ulong NowMs { get; private set; }
+        public ulong LastInputMs { get; private set; }
+
+        internal void Set(ulong now, ulong lastInput)
+        {
+            NowMs = now;
+            LastInputMs = lastInput;
+        }
+    }
+
+    private sealed class FakeExec : IExecutionStateSource
+    {
+        public ExecutionState Read() => default;
+    }
+
+    private sealed class FakeFullscreen : IFullscreenDetector
+    {
+        public bool IsFullscreenActive() => false;
+    }
+
+    private sealed class FakeAudio : IAudioActivitySource
+    {
+        public bool IsPlaying() => false;
+    }
+
+    private sealed class FakeWatch : IDisposable
+    {
+        public void Dispose() { }
+    }
+
+    /// <summary>A timer that never fires: the test drives the engine tick by tick itself.</summary>
+    private sealed class FakeTimer : ITickTimer
+    {
+        public TimeSpan Interval { get; set; }
+        public void Start() { }
+        public void Stop() { }
+        public void Dispose() { }
     }
 
     private static void SettingsCheck()

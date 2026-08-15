@@ -259,6 +259,14 @@ internal static class Native
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
+    /// <summary>
+    /// Which window the keyboard is actually talking to. Used by the self-test to prove an
+    /// overlay never becomes that window — WPF's Window.IsActive answers a related but
+    /// different question and disagrees with the window manager in places.
+    /// </summary>
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetForegroundWindow();
+
     // ---------------------------------------------------- foreground-change hook
 
     internal const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
@@ -275,6 +283,36 @@ internal static class Native
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+    // ------------------------------------------------------------- global hotkey
+
+    internal const int WM_HOTKEY = 0x0312;
+
+    internal const uint MOD_ALT = 0x0001;
+    internal const uint MOD_CONTROL = 0x0002;
+    internal const uint MOD_SHIFT = 0x0004;
+    internal const uint MOD_WIN = 0x0008;
+
+    /// <summary>
+    /// Suppresses the auto-repeat WM_HOTKEY stream while the key is held (Windows 7+).
+    /// "Blank now" is an edge, not a level: without this, holding the shortcut posts a
+    /// message every repeat interval for as long as the key is down.
+    /// </summary>
+    internal const uint MOD_NOREPEAT = 0x4000;
+
+    /// <summary>
+    /// ERROR_HOTKEY_ALREADY_REGISTERED. The one thing Windows tells us that macOS does
+    /// not: another process (or another window in this one) already owns the combination.
+    /// </summary>
+    internal const int ERROR_HOTKEY_ALREADY_REGISTERED = 1409;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     // ------------------------------------------- power / session notifications
 

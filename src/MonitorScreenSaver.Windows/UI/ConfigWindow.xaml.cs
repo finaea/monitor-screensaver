@@ -5,6 +5,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -136,6 +137,11 @@ public partial class ConfigWindow : Window
         };
         _refresh.Tick += (_, _) => RenderStatus();
 
+        // Tunnelling, not bubbling: while recording a shortcut we need first refusal on the
+        // keystroke. The Set-a-shortcut button has focus at that moment, and a bubbling
+        // handler would never see Space or Enter — the button would have activated itself.
+        AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnRecordKeyDown), handledEventsToo: true);
+
         Loaded += (_, _) => { _refresh.Start(); RenderStatus(); };
         Closed += (_, _) => { _refresh.Stop(); _app.RequestersUpdated -= OnRequestersUpdated; };
         SourceInitialized += OnSourceInitialised;
@@ -208,6 +214,7 @@ public partial class ConfigWindow : Window
         }
 
         UpdateTimeoutEcho();
+        RenderHotkey();
         _loading = false;
     }
 
@@ -667,15 +674,153 @@ public partial class ConfigWindow : Window
 
     private void OnPause(object sender, RoutedEventArgs e) => _app.Engine.Paused = !_app.Engine.Paused;
 
-    private void OnBlankNow(object sender, RoutedEventArgs e)
+    // Instant, with no beat to let go of the mouse first: the engine's manual-blank hold now
+    // ignores input until it has settled (BlankingEngine.ManualBlankSettleMs), so the click
+    // being released no longer cancels the blank it just asked for.
+    private void OnBlankNow(object sender, RoutedEventArgs e) => _app.Engine.BlankNow();
+
+    // ------------------------------------------------------------------ shortcut
+
+    /// <summary>True while the next keystroke is being read as the new shortcut.</summary>
+    private bool _recording;
+
+    /// <summary>
+    /// Shows the configured shortcut and what actually happened to it — registered, refused,
+    /// or not set. Unlike the mac head, Windows can genuinely tell us that another process
+    /// already owns the combination (RegisterHotKey fails with 1409), so the "could not
+    /// register" line here is authoritative rather than best-effort.
+    /// </summary>
+    private void RenderHotkey()
     {
-        // Give the user a beat to move the mouse off the button before we cover the screen.
-        var delay = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
-        delay.Tick += (_, _) =>
+        if (_recording)
         {
-            delay.Stop();
-            _app.Engine.BlankNow();
+            HotkeyButton.Content = "Press a combination…";
+            HotkeyStateText.Text = "Two or more modifiers, including Control or Alt. Esc to cancel.";
+            HotkeyStateText.Foreground = (Brush)FindResource("TextMuted");
+            return;
+        }
+
+        var spec = _settings.BlankNowHotkeySpec;
+        HotkeyButton.Content = spec is null ? "Set a shortcut…" : spec.ToString();
+
+        var status = _app.Hotkey.Status;
+        HotkeyStateText.Text = status.State switch
+        {
+            HotkeyState.Active => "Listening system-wide — works while another app is in front.",
+            HotkeyState.Blocked => $"Not taken — {status.Detail}",
+            HotkeyState.Failed => $"Could not register — {status.Detail}",
+            _ => "No shortcut — blanking is a tray click away regardless.",
         };
-        delay.Start();
+
+        HotkeyStateText.Foreground = (Brush)FindResource(status.State switch
+        {
+            HotkeyState.Active => "Ok",
+            HotkeyState.Blocked or HotkeyState.Failed => "Warn",
+            _ => "TextMuted",
+        });
     }
+
+    private void OnRecordHotkey(object sender, RoutedEventArgs e)
+    {
+        _recording = true;
+        RenderHotkey();
+    }
+
+    private void OnClearHotkey(object sender, RoutedEventArgs e)
+    {
+        _recording = false;
+        _settings.BlankNowHotkey = null;
+        _settings.Save();
+        _app.ApplyHotkey();
+        RenderHotkey();
+    }
+
+    /// <summary>
+    /// Reads the recorded combination. Registered as a tunnelling handler with
+    /// handledEventsToo, because the "Set a shortcut…" button has focus at this point and a
+    /// bubbling handler would never see Space or Enter — the button would have activated
+    /// itself first.
+    ///
+    /// Windows delivers Alt combinations as <see cref="Key.System"/> with the real key in
+    /// <see cref="KeyEventArgs.SystemKey"/>, which is why the key is unpacked rather than
+    /// read straight off <see cref="KeyEventArgs.Key"/>.
+    /// </summary>
+    private void OnRecordKeyDown(object sender, KeyEventArgs e)
+    {
+        if (!_recording) return;
+
+        var pressed = e.Key == Key.System ? e.SystemKey : e.Key;
+
+        // Modifiers alone are not a shortcut; wait for the key they modify.
+        if (pressed is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
+            or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin
+            or Key.System or Key.None or Key.DeadCharProcessed or Key.ImeProcessed) return;
+
+        e.Handled = true;
+
+        if (pressed == Key.Escape)
+        {
+            _recording = false;
+            RenderHotkey();
+            return;
+        }
+
+        if (KeyName(pressed) is not { } key)
+        {
+            _recording = false;
+            RenderHotkey();
+            HotkeyStateText.Text = $"{pressed} cannot be used — letters, digits and F1-F20 only.";
+            HotkeyStateText.Foreground = (Brush)FindResource("Warn");
+            return;
+        }
+
+        var spec = new HotkeySpec(Modifiers(Keyboard.Modifiers), key);
+        _recording = false;
+
+        // Refuse rather than save: a shortcut we already know is taken would either not fire
+        // or would steal a keystroke the user needs elsewhere.
+        if (_app.Hotkey.Blocker(spec) is { } blocker)
+        {
+            RenderHotkey();
+            HotkeyStateText.Text = $"{spec} not used — {blocker}";
+            HotkeyStateText.Foreground = (Brush)FindResource("Warn");
+            return;
+        }
+
+        var previous = _settings.BlankNowHotkey;
+        _settings.BlankNowHotkey = spec.ToString();
+
+        // Windows reports a clash at registration, so the answer only exists after trying.
+        // Keeping a combination the OS just refused would leave a shortcut in settings that
+        // silently never fires, so it is rolled back to whatever was working before.
+        if (_app.ApplyHotkey().State == HotkeyState.Failed)
+        {
+            var detail = _app.Hotkey.Status.Detail;
+            _settings.BlankNowHotkey = previous;
+            _app.ApplyHotkey();
+            RenderHotkey();
+            HotkeyStateText.Text = $"{spec} not used — {detail}";
+            HotkeyStateText.Foreground = (Brush)FindResource("Warn");
+            return;
+        }
+
+        _settings.Save();
+        RenderHotkey();
+    }
+
+    private static HotkeyModifiers Modifiers(ModifierKeys modifiers) =>
+        (modifiers.HasFlag(ModifierKeys.Control) ? HotkeyModifiers.Control : 0) |
+        (modifiers.HasFlag(ModifierKeys.Alt) ? HotkeyModifiers.Alt : 0) |
+        (modifiers.HasFlag(ModifierKeys.Shift) ? HotkeyModifiers.Shift : 0) |
+        (modifiers.HasFlag(ModifierKeys.Windows) ? HotkeyModifiers.Command : 0);
+
+    /// <summary>WPF's key to the canonical name stored in settings.</summary>
+    private static string? KeyName(Key key) => key switch
+    {
+        >= Key.A and <= Key.Z => key.ToString(),
+        >= Key.D0 and <= Key.D9 => ((int)key - (int)Key.D0).ToString(CultureInfo.InvariantCulture),
+        >= Key.F1 and <= Key.F20 => key.ToString(),
+        Key.Space => "Space",
+        _ => null,
+    };
 }

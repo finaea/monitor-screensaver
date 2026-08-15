@@ -1,5 +1,5 @@
 <!--
-  The Avalonia twin of the Windows head's UI/ConfigWindow.xaml: same seven cards, same
+  The Avalonia twin of the Windows head's UI/ConfigWindow.xaml: same eight cards, same
   order, same copy except where the mechanism is genuinely different on macOS (idle
   source, assertion names, launchd autostart, AVFoundation decoding).
 
