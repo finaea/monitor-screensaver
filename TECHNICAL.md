@@ -38,6 +38,27 @@ Because a held request *continuously resets* the timer, the engine models it the
 keeps pushing the activity baseline forward while the request is held, so releasing it starts a
 fresh full timeout instead of blanking instantly.
 
+### The manual blank has to ignore its own trigger
+
+"Blank now" blanks until real input arrives, which sounds simple and is not: the gesture that
+asks for it *is* input, and so is the end of that gesture. Watching for input from the moment of
+the request meant a keyboard shortcut blanked the screens and un-blanked them again the instant
+the user lifted their finger, because the key release is another HID event. The mouse equivalent
+was papered over for a while by delaying the settings window's button by 600 ms so the click
+would be over first.
+
+So the hold now ignores input until input has been *quiet* for `ManualBlankSettleMs` (500 ms),
+and only then latches the settled tick and starts watching. Consequences worth knowing: holding
+the shortcut down for ten seconds keeps the screens blanked (nothing arms while keys are
+repeating), and continuing to jiggle the mouse right after clicking the button also keeps them
+blanked until the jiggling stops — the first pause arms the hold, and the next real event wakes.
+It is the same shape as the Windows overlay's 400 ms `SettleTime`, which ignores the mouse
+traffic caused by a window appearing under the cursor.
+
+The 500 ms is exercised by a fake-clock check in the mac self-test (`ManualBlankHold`) covering
+press, key release, ragged modifier releases, a three-second hold, the settle, and a real wake —
+which fails on the old behaviour, so it is a regression test rather than a description.
+
 ---
 
 ## Overlay rendering
@@ -261,6 +282,7 @@ What each seam binds to:
 | Tray | `NotifyIcon` + custom-drawn menu | `NSStatusItem` + native `NSMenu` |
 | Settings window | WPF | Avalonia, same tokens and layout |
 | Start at login | `Run` key / logon task | `SMAppService` (launchd) |
+| Blank-now shortcut | `RegisterHotKey` (**not built yet**) | Carbon `RegisterEventHotKey` |
 
 Six things that cost real time, kept here so nobody re-derives them:
 
@@ -300,6 +322,73 @@ keeps owning the loop (`[NSApp run]`), and Avalonia's dispatcher rides the same 
 CFRunLoop, so one loop pumps the engine timer, the status item and the settings window. It is
 also initialised lazily on the first *Settings…*, so a session that never opens settings never
 loads a UI framework at all.
+
+### The blank-now shortcut
+
+`Core/Hotkey.cs` holds the portable half — a `HotkeySpec` stored as text
+(`"Ctrl+Alt+Shift+B"`, keys as *names* so one settings value means the same keystroke on both
+platforms) and the `IGlobalHotkey` seam. `Platform/MacHotkey.cs` implements it on Carbon
+`RegisterEventHotKey`, which is deprecated, still what every menu bar app uses, and the only
+route that needs no Accessibility grant: an `NSEvent` global monitor cannot consume the
+keystroke, and a `CGEventTap` requires the user to grant Accessibility in System Settings.
+
+**What macOS will and will not tell you.** Measured on 26.6 with a throwaway C harness, not
+assumed: `RegisterEventHotKey` returns `noErr` for ⌘Space (Spotlight), ⌘Tab, ⌘Q and ⌘⇧4, and
+`noErr` again when a *different process* already holds the same combination. The only clash it
+reports is a duplicate inside the same process (`eventHotKeyExistsErr`, −9878). Windows is the
+opposite: `RegisterHotKey` is documented to fail for a combination already registered, with
+`GetLastError` = 1409 `ERROR_HOTKEY_ALREADY_REGISTERED`. So a successful registration is not
+evidence of anything here, and conflict detection has to happen in four layers before it:
+
+1. **Shape** (`HotkeySpec.Weakness`, portable) — at least two modifiers, and Control or
+   Option among them. Command/Shift combinations are what macOS menus are built from, and
+   Ctrl/Ctrl+Shift is the same story on Windows; nothing can enumerate another app's
+   shortcuts, so the only defence is to stay out of that space. F12 is refused too: Windows
+   reserves it for the debugger at all times, and the setting is shared.
+2. **A hand-written reserved list** — ⌃⌘Q (Lock Screen), ⌥⌘D (hide the Dock), ⌥⌘I (Web
+   Inspector in every browser and Electron app), and so on. Hand-written because there is no
+   API that enumerates them.
+3. **Everything macOS itself holds**, from `CopySymbolicHotKeys` — declared in
+   `CarbonEvents.h` as *"the system-wide symbolic hotkeys that are defined in the Keyboard
+   preferences pane"*, and what both reference implementations use (MASShortcut's
+   `MASShortcutValidator`, and `HotKeyCenter.systemShortcuts` in
+   [sindresorhus/KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts)).
+   **230 entries, 170 enabled** on this machine. The first version of this check read the
+   `com.apple.symbolichotkeys` preference domain instead and saw **2**, because that domain
+   stores only shortcuts the user has *changed* — Spotlight's ⌘Space was invisible to it. That
+   domain is still read, but only to put a *name* to a hit: the complete table deliberately has
+   none ("no way to determine which hotkey in the Keyboards preference pane corresponds to a
+   specific dictionary"). Fn is ignored when comparing, so `⌃fn+F5` also blocks `⌃F5` — the
+   safe direction: over-blocking costs one alternative, under-blocking costs a shortcut that
+   silently never fires. Measured cost of the stricter check: in the ⌃⌥+letter space this app
+   recommends, exactly one combination is taken (`⌃⌥⇧⌘Q`), so it does not over-block.
+4. **The recorder in the settings window**, which is the strongest check and costs nothing:
+   a combination the system has already claimed never arrives, because the system consumes it
+   first. Press ⌘Space there and Spotlight opens instead of the field filling in.
+
+Refusal is the behaviour, not a warning — a shortcut we can see is taken is not saved, and the
+settings window says why. (KeyboardShortcuts' `ConflictPolicy` defaults to *warn* for
+system-shortcut clashes and *block* for menu-item ones; refusing both is the deliberate choice
+here, because a shortcut that silently never fires is a worse bug report than one the app
+declined to accept.)
+
+**Key codes are positional, so labels are translated.** `kVK_ANSI_B` means "the key where B sits
+on an ANSI keyboard", which is a different letter on Dvorak or AZERTY. The stored name stays
+ANSI — it has to, or the settings file would stop meaning the same keystroke — but every label
+is rendered through the current input source's `'uchr'` layout data
+(`TISGetInputSourceProperty` + `UCKeyTranslate`, `MacKeyCodes.Label`), which is how
+KeyboardShortcuts draws its labels too. IMEs (Pinyin, Kotoeri) carry no layout data of their
+own, so there is a fallback to `TISCopyCurrentASCIICapableKeyboardLayoutInputSource`; without it
+those users would see no key labels at all. F-keys and Space are never translated — they print
+nothing, and `UCKeyTranslate` would return a control character. The selftest checks the
+*translation*, not the label, because the label falls back to the ANSI name silently and on a US
+layout the two agree.
+
+> **Registration is not delivery.** Hot key presses arrive as Carbon events on the application
+> event target, and it is `NSApplication`'s loop that drains that queue. With a bare
+> `CFRunLoopRun` the registration succeeds and nothing is ever delivered — that was a real
+> false pass, caught by the `hotkey` diagnostic and fixed by running `[NSApp run]`. The real
+> app was always fine; the harness was not.
 
 ---
 
@@ -471,6 +560,16 @@ the number that matters: if it is shorter than the app's idle timeout, macOS pow
 off before we ever blank it. Default log path is
 `~/Library/Application Support/MonitorScreenSaver/watch.log`.
 
+```bash
+MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver hotkey [combo]
+```
+
+Holds the blank-now shortcut and prints every press, without blanking anything. That last part
+is the point: it separates "the shortcut is not registered" from "it is registered and
+something else is swallowing the keystroke", and it makes the delivery path testable — with a
+synthetic key event, even — without covering a display to find out. Defaults to the configured
+shortcut; pass one to try a different combination, which also prints the pre-flight verdict.
+
 ---
 
 ## Footprint
@@ -555,6 +654,7 @@ src/MonitorScreenSaver.Core/            net9.0 — no OS calls at all
   PowerModels.cs              requester/execution-state/snapshot models
   DisplayModels.cs            display target + pixel rect
   SystemEvents.cs             the event kinds a head can raise
+  Hotkey.cs                   shortcut spec/parsing + the IGlobalHotkey seam
   CrashLog.cs                 error.log + callback guards
 
 src/MonitorScreenSaver.Windows/         net9.0-windows — the WPF head
@@ -571,12 +671,13 @@ src/MonitorScreenSaver.Windows/         net9.0-windows — the WPF head
   UI/Theme.xaml               dark design tokens and control styles
 
 src/MonitorScreenSaver.Mac/             net9.0 — the AppKit head
-  Program.cs                  command line: tray, settings, selftest, watch, harnesses
+  Program.cs                  command line: tray, settings, selftest, watch, hotkey, harnesses
   Interop/                    objc_msgSend, CoreFoundation, CoreGraphics, IOKit, CoreAudio
   Platform/MacApp.cs          the App.xaml.cs twin: wiring, watchdog, [NSApp run]
   Platform/MacPlatform.cs     the seam implementations
   Platform/MacOverlayWindow.cs  non-activating NSPanel: black, dim or AVPlayerLooper video
   Platform/MacTray.cs         NSStatusItem + NSMenu
+  Platform/MacHotkey.cs       Carbon hot key + the conflict checks it needs
   Platform/MacSelfTest.cs     headless diagnostics (selftest)
   Platform/MacWatchMode.cs    power/topology/session logger (watch)
   UI/SettingsWindow.axaml     the Avalonia settings window

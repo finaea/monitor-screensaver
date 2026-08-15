@@ -147,6 +147,11 @@ public partial class SettingsWindow : Window
 
         TitleBar.PointerPressed += OnTitleBarPressed;
 
+        // Tunnelling, not bubbling: while recording a shortcut we need first refusal on the
+        // keystroke. The Set-a-shortcut button has focus at that moment, and a bubbling
+        // handler would never see Space or Enter — the button would have activated itself.
+        AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel, handledEventsToo: true);
+
         LoadSettingsIntoUi();
         RebuildDisplayRows();
         RebuildEditTargets();
@@ -198,6 +203,7 @@ public partial class SettingsWindow : Window
         StartupToggle.IsChecked = MacAutoStart.IsEnabled;
 
         UpdateTimeoutEcho();
+        RenderHotkey();
         _loading = false;
     }
 
@@ -518,6 +524,129 @@ public partial class SettingsWindow : Window
     private void UpdateTimeoutEcho() =>
         TimeoutEcho.Text = "= " + MacApp.Format(TimeSpan.FromSeconds(_settings.IdleTimeoutSeconds));
 
+    // ------------------------------------------------------------------ shortcut
+
+    /// <summary>True while the next keystroke is being read as the new shortcut.</summary>
+    private bool _recording;
+
+    /// <summary>
+    /// Shows the configured shortcut and what actually happened to it — registered, refused,
+    /// or not set. The state line matters more here than in most settings: macOS cannot tell
+    /// us whether another *app* holds the same combination, so this line is the only place a
+    /// user finds out that the shortcut they chose was blocked for a reason we could see.
+    /// </summary>
+    private void RenderHotkey()
+    {
+        if (_recording)
+        {
+            HotkeyButton.Content = "Press a combination…";
+            HotkeyStateText.Text = "Two or more modifiers, including Control or Option. Esc to cancel.";
+            HotkeyStateText.Foreground = Brush("TextMuted");
+            return;
+        }
+
+        var spec = _settings.BlankNowHotkeySpec;
+        HotkeyButton.Content = spec is null ? "Set a shortcut…" : spec.Display();
+
+        var status = _app.Hotkey.Status;
+        HotkeyStateText.Text = status.State switch
+        {
+            HotkeyState.Active => "Listening system-wide — works while another app is in front.",
+            HotkeyState.Blocked => $"Not taken — {status.Detail}",
+            HotkeyState.Failed => $"Could not register — {status.Detail}",
+            _ => "No shortcut — blanking is a menu bar click away regardless.",
+        };
+
+        HotkeyStateText.Foreground = status.State switch
+        {
+            HotkeyState.Active => Brush("Ok"),
+            HotkeyState.Blocked or HotkeyState.Failed => Brush("Warn"),
+            _ => Brush("TextMuted"),
+        };
+    }
+
+    private void OnRecordHotkey(object? sender, RoutedEventArgs e)
+    {
+        _recording = true;
+        RenderHotkey();
+    }
+
+    private void OnClearHotkey(object? sender, RoutedEventArgs e)
+    {
+        _recording = false;
+        _settings.BlankNowHotkey = null;
+        _settings.Save();
+        _app.ApplyHotkey();
+        RenderHotkey();
+    }
+
+    /// <summary>
+    /// Reads the recorded combination. Anything macOS has already claimed never arrives here
+    /// — the system consumes the keystroke first — which makes this the one conflict check
+    /// that needs no table: press ⌘Space and Spotlight opens instead of this field filling in.
+    /// </summary>
+    private void OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (!_recording) return;
+
+        // Modifiers alone are not a shortcut; wait for the key they modify.
+        if (e.Key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
+            or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin
+            or Key.System or Key.None) return;
+
+        e.Handled = true;
+
+        if (e.Key == Key.Escape)
+        {
+            _recording = false;
+            RenderHotkey();
+            return;
+        }
+
+        if (KeyName(e.Key) is not { } key)
+        {
+            _recording = false;
+            RenderHotkey();
+            HotkeyStateText.Text = $"{e.Key} cannot be used — letters, digits and F1-F20 only.";
+            HotkeyStateText.Foreground = Brush("Warn");
+            return;
+        }
+
+        var spec = new HotkeySpec(Modifiers(e.KeyModifiers), key);
+        _recording = false;
+
+        // Refuse rather than save: a shortcut we already know is taken would either not fire
+        // or would steal a keystroke the user needs elsewhere.
+        if (_app.Hotkey.Blocker(spec) is { } blocker)
+        {
+            RenderHotkey();
+            HotkeyStateText.Text = $"{spec.Display()} not used — {blocker}";
+            HotkeyStateText.Foreground = Brush("Warn");
+            return;
+        }
+
+        _settings.BlankNowHotkey = spec.ToString();
+        _settings.Save();
+        _app.ApplyHotkey();
+        RenderHotkey();
+    }
+
+    private static HotkeyModifiers Modifiers(KeyModifiers modifiers) =>
+        (modifiers.HasFlag(KeyModifiers.Control) ? HotkeyModifiers.Control : 0) |
+        (modifiers.HasFlag(KeyModifiers.Alt) ? HotkeyModifiers.Alt : 0) |
+        (modifiers.HasFlag(KeyModifiers.Shift) ? HotkeyModifiers.Shift : 0) |
+        (modifiers.HasFlag(KeyModifiers.Meta) ? HotkeyModifiers.Command : 0);
+
+    /// <summary>Avalonia's key to the canonical name stored in settings.</summary>
+    private static string? KeyName(Key key) => key switch
+    {
+        >= Key.A and <= Key.Z => key.ToString(),
+        >= Key.D0 and <= Key.D9 => ((int)key - (int)Key.D0).ToString(CultureInfo.InvariantCulture),
+        >= Key.F1 and <= Key.F20 => key.ToString(),
+        Key.Space => "Space",
+        _ => null,
+    };
+
     private void OnPerDisplayChanged(object? sender, RoutedEventArgs e)
     {
         if (_loading) return;
@@ -689,9 +818,10 @@ public partial class SettingsWindow : Window
 
     private void OnPause(object? sender, RoutedEventArgs e) => _app.Engine.Paused = !_app.Engine.Paused;
 
-    private void OnBlankNow(object? sender, RoutedEventArgs e) =>
-        // Give the user a beat to move the mouse off the button before we cover the screen.
-        DispatcherTimer.RunOnce(() => _app.Engine.BlankNow(), TimeSpan.FromMilliseconds(600));
+    // Instant, with no beat to let go of the mouse first: the engine's manual-blank hold now
+    // ignores input until it has settled (BlankingEngine.ManualBlankSettleMs), so the click
+    // being released no longer cancels the blank it just asked for.
+    private void OnBlankNow(object? sender, RoutedEventArgs e) => _app.Engine.BlankNow();
 
     private IBrush? Brush(string key) =>
         this.TryFindResource(key, out var value) ? value as IBrush : null;

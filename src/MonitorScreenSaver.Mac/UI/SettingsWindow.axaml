@@ -230,6 +230,21 @@
             </StackPanel>
           </Border>
 
+          <!-- shortcut -->
+          <Border Classes="card">
+            <StackPanel>
+              <TextBlock Classes="h2" Text="BLANK NOW SHORTCUT" />
+
+              <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                <Button x:Name="HotkeyButton" Classes="ghost" MinWidth="150"
+                        Click="OnRecordHotkey" />
+                <Button Classes="ghost" Content="Clear" Click="OnClearHotkey" Margin="8,0,0,0" />
+              </StackPanel>
+
+              <TextBlock x:Name="HotkeyStateText" Classes="mono" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
           <!-- policy -->
           <Border Classes="card">
             <StackPanel>

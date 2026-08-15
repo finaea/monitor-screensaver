@@ -249,6 +249,83 @@ Anything marked *(spike)* still needs a proof-of-concept before it counts as fac
     resampled from one master. `tools/make-icns.sh` is now a thin `iconutil` wrapper over the
     Swift renderer.
 
+- **2026-08-15 — Blank-now shortcut: macOS done, Windows foundation laid.**
+  - **The portable half is in Core** (`Hotkey.cs`): `HotkeySpec` stored as text
+    (`"Ctrl+Alt+Shift+B"`) with the key as a *name* rather than a platform code, so one
+    settings value means the same keystroke on both heads; the shape rules; and the
+    `IGlobalHotkey` seam. `AppSettings.BlankNowHotkey` defaults to `Ctrl+Alt+Shift+B` — three
+    modifiers and no Command/Windows key is the one shape that is out of the way on both
+    platforms. The Windows head compiles unchanged and ignores the setting until its
+    `RegisterHotKey` implementation lands.
+  - **macOS is on Carbon `RegisterEventHotKey`** — deprecated, still what every menu bar app
+    uses, and the only route that needs no Accessibility grant (an `NSEvent` global monitor
+    cannot consume the keystroke; a `CGEventTap` needs the user to grant Accessibility).
+  - **The reason conflict detection is four layers deep**, measured on 26.6 with a throwaway C
+    harness rather than assumed: `RegisterEventHotKey` returns noErr for ⌘Space, ⌘Tab, ⌘Q and
+    ⌘⇧4, and noErr again when *another process* already holds the combination. The only clash
+    it admits to is a duplicate inside the same process (−9878). Windows is the opposite —
+    documented failure with `GetLastError` 1409. So: shape rules (≥2 modifiers, Control or
+    Option among them, F12 out because Windows reserves it for the debugger), a hand-written
+    reserved list, the live `com.apple.symbolichotkeys` table, and the registration itself.
+    A combination we can see is taken is *refused*, not warned about.
+  - **`com.apple.symbolichotkeys` is partial**, measured here: 20 entries because only
+    user-changed ones are stored (Spotlight's id 64 is absent), 6 enabled but only 2 carrying a
+    readable combination (ids 79-82, "move a space", are on with defaults stored elsewhere).
+    Still worth having — the selftest proves the path by refusing this machine's own ⌃⌥␣
+    ("Select the next input source", id 61).
+  - **Registration is not delivery**, and that was a live false pass: hot key presses arrive as
+    Carbon events on the application event target, which `NSApplication`'s loop drains. The new
+    `hotkey` diagnostic first used a bare `CFRunLoopRun`, registered successfully, and received
+    nothing. With `[NSApp run]` two synthetic ⌃⌥⇧B presses produced two fires. The real app was
+    always correct — it has always run `[NSApp run]` — but the harness would have "proved" a
+    working shortcut that never fires.
+  - **`hotkey [combo]`** joins the diagnostics: holds the shortcut and prints every press
+    *without* blanking, which is what makes delivery testable at all (and what separates "not
+    registered" from "registered but something else eats it").
+  - Still manual: the recorder itself — clicking *Set a shortcut…* and pressing combinations,
+    including checking that a system-owned one like ⌘Space never reaches the field because the
+    system consumes it first.
+
+- **2026-08-15 — Two fixes taken from reading how other apps do this.** Checked
+  [sindresorhus/KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts) (the
+  de-facto modern Swift library), [MASShortcut](https://github.com/shpakovski/MASShortcut) (its
+  archived ancestor) and [tauri-apps/global-hotkey](https://github.com/tauri-apps/global-hotkey)
+  (cross-platform Rust). All three register with Carbon `RegisterEventHotKey`, so the API choice
+  here was the consensus one; the tauri crate adds a `CGEventTap` for media keys only, which
+  Carbon cannot claim. Two things they had that we did not:
+  - **`CopySymbolicHotKeys` replaces the preference-domain reader as layer 3.** Both mac
+    libraries use it (`MASShortcutValidator`, `HotKeyCenter.systemShortcuts`), it is declared in
+    `CarbonEvents.h` rather than being private, and it returns the *complete* system table:
+    **230 entries, 170 enabled** here, against 2 readable in `com.apple.symbolichotkeys`.
+    Spotlight's ⌘Space was previously invisible to us. The domain is still read, but only to
+    name a hit — the complete table carries no names by design. Fn is ignored when comparing
+    (so `⌃fn+F5` also blocks `⌃F5`), and the stricter check costs nothing in practice: the
+    ⌃⌥+letter space this app recommends has exactly one entry in it (`⌃⌥⇧⌘Q`).
+  - **Labels are translated through the active keyboard layout.** Key codes are positional, so
+    `⌃⌥⇧B` on ANSI is a different letter on Dvorak. The stored name stays ANSI; the *label* now
+    comes from `TISGetInputSourceProperty` + `UCKeyTranslate`, with a fallback to the
+    ASCII-capable input source because every IME reports no layout data of its own. The selftest
+    checks the translation rather than the label, since the label falls back to the ANSI name
+    silently and on a US layout the two agree.
+  - **Then the shortcut turned out to blank only while the key was held** — the screens came
+    straight back on release. Root cause in Core, not in the shortcut code: `BlankNow` latched
+    the input tick at the moment of the request, and the key release is a later HID event, so
+    the hold cancelled itself milliseconds later. (The same cause was already being papered over
+    for the mouse: the settings window delayed its own button by 600 ms so the click would be
+    finished first.) The hold now ignores input until input has been quiet for 500 ms, then
+    latches the settled tick — so a ten-second hold stays blanked, and the button is instant
+    again with the delay removed. Covered by a fake-clock section in the selftest that fails on
+    the old behaviour. Note for the Windows head: its overlay raises `WakeRequested` on
+    `PreviewKeyDown`, which is a second cancel path the mac overlay does not have (it never
+    raises the event) — worth checking there when the shortcut lands.
+  - Deliberately **not** adopted: KeyboardShortcuts' graduated `ConflictPolicy` (it *warns*
+    rather than blocks on system clashes), its `kEventHotKeyReleased` registration (only needed
+    for press-and-hold), its `EventHotKeyID` dispatch (we hold exactly one hot key), and the
+    recursive `NSApp.mainMenu` scan both libraries do (this app has no menu of its own worth
+    scanning). Also noted for later: KeyboardShortcuts special-cases a macOS 15.0/15.1 bug where
+    Option-plus-Shift-only shortcuts silently fail for *sandboxed* apps — not our case, but our
+    shape rules would currently permit exactly that combination.
+
 ---
 
 ## TL;DR

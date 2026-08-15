@@ -218,6 +218,26 @@ public sealed class AppSettings
     /// </summary>
     public bool NeverBlankDuringAudio { get; set; }
 
+    // ---- Shortcut -------------------------------------------------------------
+
+    /// <summary>
+    /// System-wide shortcut for "blank now", as text ("Ctrl+Alt+Shift+B"); empty or null
+    /// means no shortcut. Three modifiers by default and no Command/Windows key, which is
+    /// the one shape that is out of the way on both platforms: app menus are built from
+    /// Command (macOS) and Ctrl/Ctrl+Shift (Windows) combinations, and the Windows key is
+    /// reserved by Windows itself.
+    ///
+    /// Whether it is actually *held* is a runtime question, not a settings one — see
+    /// <see cref="IGlobalHotkey"/>. A shortcut that cannot be registered leaves the tray
+    /// menu item as the way to blank.
+    /// </summary>
+    public string? BlankNowHotkey { get; set; } = "Ctrl+Alt+Shift+B";
+
+    /// <summary>The parsed form of <see cref="BlankNowHotkey"/>, or null if unset/unparseable.</summary>
+    [JsonIgnore]
+    public HotkeySpec? BlankNowHotkeySpec =>
+        HotkeySpec.TryParse(BlankNowHotkey, out var spec) ? spec : null;
+
     // ---- Startup / lifecycle --------------------------------------------------
 
     public bool StartWithWindows { get; set; }

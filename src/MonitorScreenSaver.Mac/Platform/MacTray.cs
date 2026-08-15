@@ -32,6 +32,7 @@ public sealed unsafe class MacTray : IDisposable
     private readonly IntPtr _header;
     private readonly IntPtr _requestersHeader;
     private readonly IntPtr _requestersEnd;
+    private readonly IntPtr _blankItem;
     private readonly IntPtr _pauseItem;
     private readonly IntPtr _startupItem;
 
@@ -63,7 +64,7 @@ public sealed unsafe class MacTray : IDisposable
             _requestersHeader = AddItem("Holding display awake", null);
             _requestersEnd = AddSeparator();
 
-            AddItem("Blank now", () => _app.Engine.BlankNow());
+            _blankItem = AddItem("Blank now", () => _app.Engine.BlankNow());
             _pauseItem = AddItem("Pause blanking", () => _app.Engine.Paused = !_app.Engine.Paused);
             AddSeparator();
 
@@ -122,6 +123,15 @@ public sealed unsafe class MacTray : IDisposable
     private void UpdateMenu()
     {
         RenderStatus(_app.Engine.Status);
+
+        // The shortcut goes in the title rather than as a real keyEquivalent: a key
+        // equivalent would only fire while this menu is open, and the global hot key
+        // (MacHotkey) already covers the rest of the time. Shown only when it is actually
+        // held, so the menu never advertises a shortcut that was refused.
+        SetTitle(_blankItem, _app.Hotkey.Status is { State: HotkeyState.Active } && _app.Settings.BlankNowHotkeySpec is { } spec
+            ? $"Blank now   {spec.Display()}"
+            : "Blank now");
+
         ObjC.SendVoid(_startupItem, ObjC.Sel("setState:"), (nint)(MacAutoStart.IsEnabled ? 1 : 0));
         RebuildRequesterMenu();
         _app.RefreshRequesters();

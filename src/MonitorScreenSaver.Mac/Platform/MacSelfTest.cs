@@ -55,6 +55,8 @@ public static class MacSelfTest
         AudioProbe();
         LiveRequesterQuery();
         CursorHiding();
+        HotkeyCheck();
+        ManualBlankHold();
         SettingsCheck();
 
         Line(new string('=', 78));
@@ -581,6 +583,229 @@ public static class MacSelfTest
         {
             Fail($"threw: {ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// The "blank now" shortcut, end to end: the stored value parses, the conflict checks
+    /// refuse what they should, and the combination actually registers with the OS.
+    ///
+    /// The last check is the interesting one. macOS reports a clash *only* when the same
+    /// process asks twice (eventHotKeyExistsErr) — a second process registering a combination
+    /// another one already holds gets noErr — so that error is the only registration signal
+    /// there is, and if it ever stops arriving, every conflict check we have left is a
+    /// hand-written table.
+    /// </summary>
+    private static void HotkeyCheck()
+    {
+        Section("Blank now shortcut (global hot key)");
+
+        try
+        {
+            var settings = AppSettings.Load();
+            var configured = settings.BlankNowHotkeySpec;
+
+            if (string.IsNullOrWhiteSpace(settings.BlankNowHotkey))
+            {
+                Line("    no shortcut configured — blanking is menu bar only");
+            }
+            else
+            {
+                Check(configured is not null,
+                    $"settings value parses: \"{settings.BlankNowHotkey}\"" +
+                    (configured is null ? " — could NOT be parsed" : $" -> {configured.Display()}"));
+            }
+
+            using var hotkey = new MacHotkey(() => { });
+
+            // The system table has to be non-trivially populated, or layer 3 is silently dead:
+            // this is the check that would have caught the old plist-only version, which saw 2
+            // shortcuts where CopySymbolicHotKeys sees 170.
+            var table = MacSystemHotkeys.Table();
+            var (overrides, enabledOverrides) = MacSystemHotkeys.Overrides();
+
+            Check(table.Count > 20,
+                $"CopySymbolicHotKeys returned {table.Count} enabled system shortcut(s) — the complete table");
+            Line($"    com.apple.symbolichotkeys (names only): {enabledOverrides} enabled, " +
+                 $"{overrides.Count} with a readable combination — customised shortcuts only");
+
+            // Take a real entry out of the live table and prove it is refused. Machine-dependent
+            // in *which* combination it picks, but every Mac has plenty.
+            var live = table
+                .Select(e => MacSystemHotkeys.AsSpec(e.Code, e.Modifiers))
+                .FirstOrDefault(s => s is not null && s.Weakness() is null);
+
+            if (live is not null)
+            {
+                Check(hotkey.Blocker(live) is not null,
+                    $"a shortcut macOS itself holds is refused ({live.Display()})");
+            }
+            else
+            {
+                Line("    no entry in the system table is a candidate for us, so that path is " +
+                     "exercised by the hand-written list below only");
+            }
+
+            // Deterministic conflict checks, independent of what this machine has configured.
+            Check(hotkey.Blocker(new HotkeySpec(HotkeyModifiers.Command, "B")) is not null,
+                "a one-modifier combination is refused (⌘B is app-shortcut territory)");
+            Check(hotkey.Blocker(new HotkeySpec(HotkeyModifiers.Command | HotkeyModifiers.Shift, "B")) is not null,
+                "Command+Shift is refused (that is what app menus are built from)");
+            Check(hotkey.Blocker(new HotkeySpec(HotkeyModifiers.Control | HotkeyModifiers.Command, "Q")) is not null,
+                "a reserved system combination is refused (⌃⌘Q is Lock Screen)");
+            Check(hotkey.Blocker(new HotkeySpec(
+                    HotkeyModifiers.Control | HotkeyModifiers.Alt | HotkeyModifiers.Shift, "F12")) is not null,
+                "F12 is refused (reserved for the debugger on Windows, and the setting is shared)");
+
+            var probe = configured ?? new HotkeySpec(
+                HotkeyModifiers.Control | HotkeyModifiers.Alt | HotkeyModifiers.Shift, "B");
+
+            if (hotkey.Blocker(probe) is { } blocked)
+            {
+                Line($"    {probe.Display()} is refused on this machine — {blocked}");
+            }
+            else
+            {
+                var status = hotkey.Apply(probe);
+                Check(status.State == HotkeyState.Active,
+                    $"registered {probe.Display()} with the OS ({status.Detail})");
+
+                // A second holder in this same process: the one clash macOS will admit to.
+                using var second = new MacHotkey(() => { });
+                var clash = second.Apply(probe);
+                Check(clash.State == HotkeyState.Failed,
+                    clash.State == HotkeyState.Failed
+                        ? "a duplicate registration is reported (eventHotKeyExistsErr still works)"
+                        : $"a duplicate registration was NOT reported — it returned {clash.State}");
+            }
+
+            Check(MacKeyCodes.Code("B") == 0x0B && MacKeyCodes.Code("Space") == 0x31,
+                "key name to macOS virtual key code (B=0x0B, Space=0x31, from Events.h)");
+
+            // Labels come from the layout in use, not the stored ANSI name. Checking the
+            // translation rather than the label, because the label falls back to that name
+            // silently — on a US layout the two agree and a broken translation would not show.
+            var translated = MacKeyCodes.Translate(0x0B);
+            Check(translated is not null,
+                translated is null
+                    ? "no keyboard layout resolved — key labels fell back to ANSI names"
+                    : $"key labels come from the current layout (UCKeyTranslate: key code 0x0B prints \"{translated}\")");
+        }
+        catch (Exception ex)
+        {
+            Fail($"threw: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The manual-blank hold, driven by a fake clock so the sequence is exact and no display is
+    /// ever covered. This is the shipped bug it exists for: the shortcut blanked the screens and
+    /// they came straight back when the user lifted their finger, because the key *release* is
+    /// itself input and the hold was watching for input from the moment of the press.
+    ///
+    /// Portable logic, tested from the mac head because that is where the harness lives.
+    /// </summary>
+    private static void ManualBlankHold()
+    {
+        Section("Manual blank hold (engine logic, fake clock)");
+
+        try
+        {
+            var clock = new FakeClock();
+            var settings = new AppSettings { IdleTimeoutSeconds = 300, ManagedDisplayIds = ["x"] };
+
+            // The engine hands its tick to the timer factory, so the test can drive the
+            // decision itself instead of waiting on a real timer.
+            Action? tick = null;
+
+            using var engine = new BlankingEngine(settings, new EnginePlatform(
+                clock,
+                new FakeExec(),
+                new FakeFullscreen(),
+                new FakeAudio(),
+                _ => new FakeWatch(),
+                (_, action) => { tick = action; return new FakeTimer(); }));
+
+            // The keystroke that asks for the blank.
+            clock.Set(now: 1000, lastInput: 1000);
+            engine.BlankNow();
+            Check(engine.Status.Blanked, "blanks on request");
+
+            // Letting go of it, ~120 ms later. This is what used to unblank instantly.
+            clock.Set(now: 1120, lastInput: 1120);
+            tick!();
+            Check(engine.Status.Blanked, "still blanked when the shortcut key is released");
+
+            // …and its modifiers, in the usual ragged order.
+            clock.Set(now: 1180, lastInput: 1180);
+            tick!();
+            clock.Set(now: 1240, lastInput: 1240);
+            tick!();
+            Check(engine.Status.Blanked, "still blanked after the modifier keys are released");
+
+            // Someone holding the shortcut down for three seconds: input keeps arriving, and
+            // the hold must survive all of it.
+            for (ulong t = 1300; t <= 4300; t += 100)
+            {
+                clock.Set(now: t, lastInput: t);
+                tick!();
+            }
+            Check(engine.Status.Blanked, "still blanked after a three-second hold on the key");
+
+            // Quiet for the settle window: the hold now arms against the settled tick.
+            clock.Set(now: 4900, lastInput: 4300);
+            tick!();
+            Check(engine.Status.Blanked, "stays blanked once input goes quiet");
+
+            // Real input afterwards — the point of the whole feature — wakes it.
+            clock.Set(now: 5000, lastInput: 5000);
+            tick!();
+            Check(!engine.Status.Blanked, "real input after that wakes the displays");
+        }
+        catch (Exception ex)
+        {
+            Fail($"threw: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private sealed class FakeClock : IActivityClock
+    {
+        public ulong NowMs { get; private set; }
+        public ulong LastInputMs { get; private set; }
+
+        internal void Set(ulong now, ulong lastInput)
+        {
+            NowMs = now;
+            LastInputMs = lastInput;
+        }
+    }
+
+    private sealed class FakeExec : IExecutionStateSource
+    {
+        public ExecutionState Read() => default;
+    }
+
+    private sealed class FakeFullscreen : IFullscreenDetector
+    {
+        public bool IsFullscreenActive() => false;
+    }
+
+    private sealed class FakeAudio : IAudioActivitySource
+    {
+        public bool IsPlaying() => false;
+    }
+
+    private sealed class FakeWatch : IDisposable
+    {
+        public void Dispose() { }
+    }
+
+    /// <summary>A timer that never fires: the test drives the engine tick by tick itself.</summary>
+    private sealed class FakeTimer : ITickTimer
+    {
+        public TimeSpan Interval { get; set; }
+        public void Start() { }
+        public void Stop() { }
+        public void Dispose() { }
     }
 
     private static void SettingsCheck()

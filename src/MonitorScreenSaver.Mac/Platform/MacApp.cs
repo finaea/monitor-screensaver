@@ -17,6 +17,7 @@ public sealed class MacApp
     private OverlayManager _overlays = null!;
     private MacSystemEvents _events = null!;
     private MacTray _tray = null!;
+    private MacHotkey _hotkey = null!;
     private MacRunLoopTimer _watchdog = null!;
     private FileStream? _instanceLock;
 
@@ -28,6 +29,7 @@ public sealed class MacApp
     internal BlankingEngine Engine => _engine;
     internal OverlayManager Overlays => _overlays;
     internal PowerSnapshot Requesters => _requesters;
+    internal MacHotkey Hotkey => _hotkey;
 
     /// <param name="openSettings">
     /// Opens the settings window as soon as the app has launched. The tray menu is owned
@@ -73,6 +75,13 @@ public sealed class MacApp
         _events = new MacSystemEvents();
         _events.Event += OnSystemEvent;
 
+        // Blanking from the keyboard. Registered before the loop starts (Carbon accepts the
+        // registration without one; delivery needs the loop, which begins below), and its
+        // outcome is deliberately not fatal — a shortcut that could not be taken leaves the
+        // menu bar item as the way to blank, and the settings window explains why.
+        _hotkey = new MacHotkey(() => _engine.BlankNow());
+        ApplyHotkey();
+
         // The status item must be created after the app has finished launching (its
         // window-server registration happens inside [NSApp run]); a one-shot timer on
         // the running loop is the simplest way to get there without an app delegate.
@@ -115,11 +124,28 @@ public sealed class MacApp
 
     internal void OpenSettings() => UI.MacUi.ShowSettings(this);
 
+    /// <summary>
+    /// (Re)takes the configured shortcut. Called at launch and whenever the settings window
+    /// changes it. Logs a refusal rather than surfacing it here — the settings window shows
+    /// <see cref="MacHotkey.Status"/>, which is where someone can act on it.
+    /// </summary>
+    internal HotkeyStatus ApplyHotkey()
+    {
+        var status = _hotkey.Apply(_settings.BlankNowHotkeySpec);
+
+        if (status.State is HotkeyState.Blocked or HotkeyState.Failed)
+            CrashLog.Write("MacApp.ApplyHotkey", new InvalidOperationException(
+                $"{_settings.BlankNowHotkey}: {status.Detail}"));
+
+        return status;
+    }
+
     internal void Quit()
     {
         try
         {
             _watchdog?.Dispose();
+            _hotkey?.Dispose();
             _engine?.Dispose();
             _overlays?.Dispose();
             _events?.Dispose();

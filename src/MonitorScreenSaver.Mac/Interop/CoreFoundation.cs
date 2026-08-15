@@ -88,6 +88,54 @@ internal static class CF
 
     internal static string? DictGetString(IntPtr dict, string key) => FromString(DictGet(dict, key));
 
+    /// <summary>
+    /// Dictionary value as a flag. Handles both spellings a plist can use — CFBoolean and a
+    /// 0/1 CFNumber — because preference files written by different macOS versions differ
+    /// (com.apple.symbolichotkeys has both in the wild). Type-checked rather than assumed:
+    /// CFBooleanGetValue on a CFNumber is undefined behaviour.
+    /// </summary>
+    internal static bool DictGetBool(IntPtr dict, string key)
+    {
+        var value = DictGet(dict, key);
+        if (value == IntPtr.Zero) return false;
+
+        var type = CFGetTypeID(value);
+        if (type == CFBooleanGetTypeID()) return CFBooleanGetValue(value);
+        if (type == CFNumberGetTypeID()) return NumberToLong(value) != 0;
+        return false;
+    }
+
+    // ---------------------------------------------------------------- data
+
+    /// <summary>
+    /// The bytes of a CFData, borrowed — valid only while the CFData is alive. Used for the
+    /// current keyboard layout ('uchr' data), which UCKeyTranslate reads in place.
+    /// </summary>
+    [DllImport(Lib)]
+    internal static extern IntPtr CFDataGetBytePtr(IntPtr data);
+
+    // ---------------------------------------------------------------- types / preferences
+
+    [DllImport(Lib)]
+    internal static extern nuint CFGetTypeID(IntPtr cf);
+
+    [DllImport(Lib)]
+    internal static extern nuint CFBooleanGetTypeID();
+
+    [DllImport(Lib)]
+    internal static extern nuint CFNumberGetTypeID();
+
+    [DllImport(Lib)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static extern bool CFBooleanGetValue(IntPtr boolean);
+
+    /// <summary>
+    /// A preference value from another application's domain — how the system's own keyboard
+    /// shortcuts are read (com.apple.symbolichotkeys). Caller releases the result.
+    /// </summary>
+    [DllImport(Lib)]
+    internal static extern IntPtr CFPreferencesCopyAppValue(IntPtr key, IntPtr applicationID);
+
     // ---------------------------------------------------------------- arrays
 
     [DllImport(Lib)]

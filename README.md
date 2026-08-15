@@ -104,6 +104,7 @@ banner, no "Restart elevated", no logon task, and the holder list simply always 
 | **Video formats** | Plays what AVFoundation decodes: MP4/M4V/MOV/TS. **WMV, AVI, MKV and WebM do not work** — that is the one feature the Windows build has and this one doesn't. |
 | **Fonts** | No Segoe UI or Cascadia Mono on macOS, so the settings window uses San Francisco and SF Mono. Same sizes and layout, slightly different letterforms. |
 | **The Dock** | Opening the settings window puts the app in the Dock, which is what lets the window come to the front and take keystrokes; closing it takes the app back out, still running in the menu bar. Minimising leaves a Dock tile like any other window — click it to bring the window back. |
+| **Blank now shortcut** | **⌃⌥⇧B** by default, system-wide: blanks from wherever you are. Change it in *Settings → Blank now shortcut* (click the button, press the combination) or clear it there. macOS-only for now — the Windows build ignores the setting until its side is built. |
 | **The cursor** | Hidden while the screens are blanked, because a lit arrow parked on a blanked OLED is the exact thing this app exists to prevent. That needs a private API — if a future macOS breaks it, blanking still works and the cursor just stays visible. |
 
 Set macOS's own display-sleep timer **longer** than the app's idle timeout
@@ -115,11 +116,22 @@ Two things macOS does *not* let any app cover: the **login/lock screen** (it bel
 `loginwindow`), and anything drawn above the screensaver window level by another app — a
 desktop-pet or overlay utility can float above the blanking overlay.
 
+About that shortcut: macOS will happily hand out a combination another app is already using
+and never mention it, so the app refuses combinations it *can* see a problem with — one
+modifier, Command/Shift-only, a macOS-reserved combination, or one you have assigned in
+System Settings → Keyboard → Shortcuts — and the settings window says which. What no OS can
+check is what a shortcut means *inside* another app, because a system-wide shortcut takes the
+keystroke before the app in front sees it. That is why the default carries three modifiers and
+no ⌘: almost nothing else lives there. If a shortcut turns out to be taken, the symptom is
+that nothing happens when you press it — pick another one, and blank from the menu bar
+meanwhile.
+
 Diagnostics live on the binary inside the bundle:
 
 ```bash
 publish/MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver selftest report.txt
 publish/MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver watch
+publish/MonitorScreenSaver.app/Contents/MacOS/MonitorScreenSaver hotkey
 ```
 
 `selftest` runs ~65 checks against your actual machine — displays, overlay placement against
@@ -127,6 +139,8 @@ the window server, power-assertion detection and attribution, the settings windo
 stack, the menu bar item, the cursor path — and exits 0 when they all pass. More displays mean
 more checks, since several sections run per display. `watch` logs every
 power, display-topology and lock transition with a heartbeat of everything the engine reads.
+`hotkey` holds the shortcut and prints every press without blanking anything, which is how to
+tell "not registered" apart from "registered, but something else is eating the keystroke".
 
 ---
 
@@ -267,7 +281,7 @@ in; on the machine this was measured on that's 20 driver modules and 329 MB of *
 space*, which is reservation, not memory consumed.
 
 It's still a WPF app rather than a tiny native tray utility, and it does load WinForms purely
-for the tray icon. If you want something that idles at 5 MB, this isn't it. Full breakdown in
+for the tray icon. Full breakdown in
 [TECHNICAL.md](TECHNICAL.md#footprint).
 
 ---

@@ -15,6 +15,9 @@ using MonitorScreenSaver.Mac.Interop;
 //   assertions         dump the holder list (compare with: pmset -g assertions)
 //   watch [path]       timestamped log of power/topology/session events + engine-input
 //                      heartbeat, to a file (default: <settings dir>/watch.log)
+//   hotkey [combo]     register the "blank now" shortcut (default: the configured one) and
+//                      log every press, without blanking anything — the only way to test
+//                      delivery, since a successful registration proves nothing on macOS
 //   engine [sec]       run the real Core BlankingEngine + overlays: an actual working
 //                      screensaver loop with a [sec] idle timeout (default 15)
 //   overlay <mode> [sec] [videoPath]
@@ -52,6 +55,10 @@ switch (command)
         MacWatchMode.Start(args.Length > 1 ? args[1] : null);
         break;
 
+    case "hotkey":
+        Hotkey(args.Length > 1 ? args[1] : null);
+        break;
+
     case "engine":
         Engine(args.Length > 1 && int.TryParse(args[1], out var t) ? t : 15);
         break;
@@ -69,7 +76,8 @@ switch (command)
 
     default:
         Console.WriteLine("usage: MonitorScreenSaverMac [tray | settings | selftest [path] | status [n] | displays |");
-        Console.WriteLine("                             assertions | watch [path] | engine [timeoutSeconds] |");
+        Console.WriteLine("                             assertions | watch [path] | hotkey [combo] |");
+        Console.WriteLine("                             engine [timeoutSeconds] |");
         Console.WriteLine("                             overlay <black|dim|video> [seconds] [videoPath]]");
         return 1;
 }
@@ -95,6 +103,48 @@ static void Status(int iterations)
 
         if (i < iterations - 1) Thread.Sleep(1000);
     }
+}
+
+/// <summary>
+/// Holds the shortcut and reports every press. Separate from the real app on purpose: the
+/// action here is a printed line rather than blanking the screens, which makes the delivery
+/// path testable at any time — including with a synthetic key event — without covering
+/// someone's displays to find out.
+/// </summary>
+static void Hotkey(string? combo)
+{
+    AppKit.EnsureApplication();
+
+    var text = combo ?? AppSettings.Load().BlankNowHotkey;
+
+    if (!HotkeySpec.TryParse(text, out var spec) || spec is null)
+    {
+        Console.WriteLine(string.IsNullOrWhiteSpace(text)
+            ? "No shortcut configured. Pass one, e.g.: hotkey Ctrl+Alt+Shift+B"
+            : $"Could not parse \"{text}\". Try something like Ctrl+Alt+Shift+B.");
+        return;
+    }
+
+    var presses = 0;
+    using var hotkey = new MacHotkey(() =>
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] fired — press #{++presses} " +
+                          "(the real app blanks here)"));
+
+    if (hotkey.Blocker(spec) is { } blocker)
+        Console.WriteLine($"pre-flight: {spec.Display()} would be refused — {blocker}");
+
+    var status = hotkey.Apply(spec);
+    Console.WriteLine($"{spec} ({spec.Display()}): {status.State} — {status.Detail}");
+
+    if (status.State != HotkeyState.Active) return;
+
+    Console.WriteLine("Press it. Ctrl+C to stop.");
+
+    // [NSApp run], not CFRunLoopRun: hot key presses arrive as Carbon events on the
+    // application event target, and it is NSApplication's loop that drains that queue.
+    // Measured — with a bare CFRunLoopRun the registration succeeds and nothing is ever
+    // delivered, which is exactly the failure this command exists to catch.
+    ObjC.SendVoid(ObjC.Send(ObjC.Class("NSApplication"), ObjC.Sel("sharedApplication")), ObjC.Sel("run"));
 }
 
 static void Displays()

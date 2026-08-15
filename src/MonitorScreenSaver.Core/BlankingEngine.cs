@@ -54,8 +54,31 @@ public sealed class BlankingEngine : IDisposable
     private ulong _audioTick;
     private ulong _resumeTick;
 
-    /// <summary>Input tick at the moment "Blank now" was pressed; cleared by real input.</summary>
-    private ulong? _manualBlankAtInput;
+    /// <summary>A manual "blank now" is in force; cleared by real input, once armed.</summary>
+    private bool _manualBlank;
+
+    /// <summary>
+    /// The input tick the manual blank watches, set once input has settled. Null while the
+    /// gesture that asked for the blank is still finishing — see <see cref="ManualBlankSettleMs"/>.
+    /// </summary>
+    private ulong? _manualBlankMark;
+
+    /// <summary>
+    /// How long input has to be quiet before a manual blank starts watching for input.
+    ///
+    /// The gesture that asks for the blank is itself input, and so is the end of it: releasing
+    /// a shortcut key, releasing its modifiers, letting go of the mouse button. Watching from
+    /// the moment of the request meant the release cancelled the blank a few milliseconds
+    /// later — the screens went black and came straight back when the user lifted their
+    /// finger. Long enough to cover a key release and its modifiers, short enough that a real
+    /// intent to wake still gets through immediately: any gap of this length arms the hold,
+    /// and the next keystroke or mouse movement after that wakes as usual.
+    ///
+    /// The same shape as the Windows overlay's own SettleTime (400 ms, OverlayWindow.cs), which
+    /// exists for the neighbouring problem: ignoring the mouse traffic caused by a window
+    /// appearing under the cursor.
+    /// </summary>
+    private const ulong ManualBlankSettleMs = 500;
 
     private bool _paused;
     private bool _disposed;
@@ -120,18 +143,26 @@ public sealed class BlankingEngine : IDisposable
     {
         var now = _os.Clock.NowMs;
         _foregroundTick = _displayRequestTick = _fullscreenTick = _audioTick = _resumeTick = now;
-        _manualBlankAtInput = null;
+        ClearManualBlank();
     }
 
     /// <summary>
-    /// Blank immediately and stay blanked until real keyboard/mouse input arrives.
-    /// Deliberately overrides a held display request — it is an explicit user command,
-    /// not a policy decision.
+    /// Blank immediately and stay blanked until real keyboard/mouse input arrives — where
+    /// "real" excludes the tail of the gesture that asked for it (see
+    /// <see cref="ManualBlankSettleMs"/>). Deliberately overrides a held display request: it is
+    /// an explicit user command, not a policy decision.
     /// </summary>
     public void BlankNow()
     {
-        _manualBlankAtInput = _os.Clock.LastInputMs;
+        _manualBlank = true;
+        _manualBlankMark = null;
         Tick();
+    }
+
+    private void ClearManualBlank()
+    {
+        _manualBlank = false;
+        _manualBlankMark = null;
     }
 
     // ------------------------------------------------------------------ the decision
@@ -195,9 +226,27 @@ public sealed class BlankingEngine : IDisposable
         var idle = TimeSpan.FromMilliseconds(now >= baseline ? now - baseline : 0);
         var timeout = TimeSpan.FromSeconds(_settings.IdleTimeoutSeconds);
 
-        // A manual "blank now" holds until the user actually touches something.
-        var forced = _manualBlankAtInput is { } mark && inputTick <= mark;
-        if (!forced) _manualBlankAtInput = null;
+        // A manual "blank now" holds until the user actually touches something — but not until
+        // the gesture that asked for it has finished. Until input has been quiet for
+        // ManualBlankSettleMs, every event still belongs to that gesture (the shortcut's key
+        // release, its modifiers, the mouse button coming up), so the hold ignores input
+        // entirely; after that it watches the settled tick and the next real event cancels it.
+        var forced = false;
+
+        if (_manualBlank)
+        {
+            if (_manualBlankMark is { } mark)
+            {
+                forced = inputTick <= mark;
+                if (!forced) ClearManualBlank();
+            }
+            else
+            {
+                forced = true;
+                if (now >= inputTick && now - inputTick >= ManualBlankSettleMs)
+                    _manualBlankMark = inputTick;
+            }
+        }
 
         var blanked = !_paused && (forced || idle >= timeout);
 
