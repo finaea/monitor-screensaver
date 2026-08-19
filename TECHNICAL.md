@@ -473,6 +473,7 @@ Requires the .NET 9 SDK. The Windows head targets `net9.0-windows`, `win-x64`.
 ```bash
 dotnet build MonitorScreenSaver.sln   # all three projects (works on macOS too)
 tools/bundle-macos.sh [osx-x64]       # ./publish/MonitorScreenSaver.app
+tools/release-macos.sh                # both release dmgs — x64 then arm64, so the leftover .app is native
 tools/make-icns.sh                    # regenerate the .icns + menu bar art (needs Xcode CLT)
 ```
 
