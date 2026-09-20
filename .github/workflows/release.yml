@@ -132,8 +132,12 @@ jobs:
         shell: pwsh
         run: |
           $hash = (Get-FileHash 'publish/MonitorScreenSaver.exe' -Algorithm SHA256).Hash.ToLower()
-          # Two spaces between hash and name: the format `sha256sum -c` expects.
-          "$hash  MonitorScreenSaver.exe" | Set-Content 'publish/SHA256SUMS.txt' -Encoding ascii
+          # Two spaces between hash and name is the format `sha256sum -c` expects, and the
+          # line ending has to be LF: Set-Content would write CRLF here, and coreutils then
+          # reads the trailing \r as part of the filename and reports "No such file".
+          # WriteAllText also avoids a BOM, which breaks the first line the same way.
+          $line = "$hash  MonitorScreenSaver.exe`n"
+          [IO.File]::WriteAllText((Join-Path $PWD 'publish/SHA256SUMS.txt'), $line)
           "sha256=$hash" >> $env:GITHUB_OUTPUT
 
       # Binds the exe's digest to this repo, this workflow and this commit, signed through
@@ -199,7 +203,9 @@ jobs:
             $lines += ""
             foreach ($pair in $vt -split ',') {
               $name, $url = $pair -split '=', 2
-              $lines += "- [$tick$name$tick]($url)"
+              # The action echoes back the path it was given, so this is the glob from
+              # `files:` above, not a bare asset name. Label it the way it ships.
+              $lines += "- [$tick$(Split-Path $name -Leaf)$tick]($url)"
             }
             $lines += ""
             $lines += "Expect a couple of heuristic flags. The exe is unsigned, it is a 150 MB"
