@@ -166,10 +166,12 @@ public partial class App : System.Windows.Application
 
         _ = RefreshRequestersAsync();
 
-        // Show the window on first run (nothing selected yet) and after a relaunch —
+        // Show the window on first run (nothing picked yet) and after a relaunch —
         // otherwise "Restart elevated" silently replaces the process and looks like
-        // nothing happened at all.
-        if (_settings.ManagedDisplayIds.Count == 0 || relaunching)
+        // nothing happened at all. First run means there was no settings file, not an
+        // empty list: unticking every display is a deliberate "manage nothing", and
+        // keying off emptiness reopens this window in the user's face on every launch.
+        if ((!_settings.LoadedFromDisk && _settings.ManagedDisplayIds.Count == 0) || relaunching)
             ShowConfig();
     }
 
