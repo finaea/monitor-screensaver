@@ -1,6 +1,9 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
-  <assemblyIdentity version="1.0.0.0" name="MonitorScreenSaver.app" />
+  <!-- Keep in step with <Version> in MonitorScreenSaver.Windows.csproj. Nothing in the
+       build wires these together, so .github/workflows/release.yml fails the release if
+       they drift apart or disagree with the tag. -->
+  <assemblyIdentity version="1.2.1.0" name="MonitorScreenSaver.app" />
 
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
