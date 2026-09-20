@@ -369,14 +369,20 @@ jobs:
           $title = "MonitorScreenSaver $($tag.Substring(1))"
           $assets = (Get-ChildItem dist -File | Sort-Object Name).FullName
 
-          Write-Host "Uploading:"
+          # This job only downloads artifacts, it never checks out the source, so there is
+          # no git remote for gh to infer the repository from -- without --repo every call
+          # here dies with "fatal: not a git repository". Naming it explicitly is cheaper
+          # than checking out a repo whose contents this job does not need.
+          $repo = '${{ github.repository }}'
+
+          Write-Host "Uploading to ${repo}:"
           $assets | ForEach-Object { Write-Host "  $(Split-Path $_ -Leaf)" }
 
           # Idempotent, so a re-run against the same tag updates instead of erroring.
-          gh release view $tag > $null 2> $null
+          gh release view $tag --repo $repo > $null 2> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release edit $tag --title $title --notes-file 'RELEASE_NOTES.md'
-            gh release upload $tag $assets --clobber
+            gh release edit $tag --repo $repo --title $title --notes-file 'RELEASE_NOTES.md'
+            gh release upload $tag $assets --repo $repo --clobber
           } else {
-            gh release create $tag $assets --title $title --notes-file 'RELEASE_NOTES.md'
+            gh release create $tag $assets --repo $repo --title $title --notes-file 'RELEASE_NOTES.md'
           }
