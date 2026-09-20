@@ -163,6 +163,10 @@ public sealed unsafe class MacTray : IDisposable
             var item = MakeItem(title, null, indent: 1);
             if (!dimmed) ObjC.SendVoid(item, ObjC.Sel("setEnabled:"), true);
             ObjC.SendVoid(_menu, ObjC.Sel("insertItem:atIndex:"), item, (IntPtr)insertAt++);
+            // insertItem: took its own retain; hand ours back or every menu open leaks a
+            // row. What we keep in _dynamicItems is a borrowed pointer, valid exactly as
+            // long as the menu holds the item — which is until removeItem: above.
+            ObjC.SendVoid(item, ObjC.Sel("release"));
             _dynamicItems.Add(item);
         }
 
@@ -264,6 +268,10 @@ public sealed unsafe class MacTray : IDisposable
     {
         var item = MakeItem(title, handler, indent: 0);
         ObjC.SendVoid(_menu, ObjC.Sel("addItem:"), item);
+        // Same ownership hand-off as the dynamic rows: addItem: retains, so the alloc/init
+        // retain from MakeItem goes back here. The returned pointer is borrowed from the
+        // menu, which holds these fixed items until Dispose releases the menu itself.
+        ObjC.SendVoid(item, ObjC.Sel("release"));
         return item;
     }
 
@@ -274,6 +282,10 @@ public sealed unsafe class MacTray : IDisposable
         return separator;
     }
 
+    /// <summary>
+    /// alloc/init, so the caller owns the returned retain and must release it once the
+    /// menu has taken its own (see AddItem / RebuildRequesterMenu).
+    /// </summary>
     private IntPtr MakeItem(string title, Action? handler, nint indent)
     {
         var cfTitle = CF.CreateString(title);
