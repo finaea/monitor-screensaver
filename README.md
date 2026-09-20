@@ -35,18 +35,43 @@ window around while you sit there waiting. Microsoft's own name for that is
 
 ### Windows
 
-Grab `MonitorScreenSaver.exe` from [Releases](../../releases) and run it. Single file, no installer,
-nothing to unpack — it's self-contained, so you don't need .NET installed.
+Two downloads on [Releases](../../releases). Both are the same app, single file, no installer.
+
+| | Size | |
+|---|---|---|
+| **`MonitorScreenSaver.exe`** | 1.4 MB | **Start here.** Uses the .NET 9 runtime on your PC |
+| `MonitorScreenSaver-selfcontained.exe` | 146 MB | Carries its own runtime. For machines you can't install software on |
+
+The small one is a hundred times smaller because 99% of the big one is a private copy of
+the .NET runtime.
+
+**Most PCs don't have the runtime yet.** If yours doesn't:
+
+[**Download the .NET 9 Desktop Runtime**](https://aka.ms/dotnet/9.0/windowsdesktop-runtime-win-x64.exe)
+— 58 MB, one click, about a minute. Take the x64 one even on an ARM laptop: this app is a
+win-x64 build, so it runs emulated and wants the x64 runtime.
+
+Prefer a terminal? `winget install --id Microsoft.DotNet.DesktopRuntime.9 -e`
+
+Run it without the runtime and Windows just tells you it's missing — nothing breaks, you
+come back here and install it.
+
+Either way Windows will show a SmartScreen warning on first run, because these builds
+aren't code signed. **More info** → **Run anyway**. Every release ships a SHA-256 and a
+[build attestation](../../releases/latest) you can check with
+`gh attestation verify MonitorScreenSaver.exe -R finaea/monitor-screensaver` if you'd
+rather verify than trust.
 
 Or build it yourself:
 
 ```powershell
 git clone <this repo>
 cd MonitorScreenSaver
-.\tools\publish.ps1        # produces .\publish\MonitorScreenSaver.exe
+.\tools\publish.ps1                    # both variants into .\publish
+.\tools\publish.ps1 -Variant Fdd       # just the small one
 ```
 
-Needs the .NET 9 SDK to build. Nothing to install to run.
+Needs the .NET 9 SDK to build.
 
 ### macOS
 
@@ -55,8 +80,9 @@ Apple silicon, `…-macos-x64.dmg` for Intel. There is no universal build, becau
 merge two single-file .NET executables. If you're not sure which you have,  → *About This Mac*:
 "Apple M*x*" is arm64, "Intel" is x64.
 
-1. **Double-click the `.dmg`.** A window opens with the app on the left and an **Applications**
-   shortcut on the right.
+1. **Double-click the `.dmg`.** A window opens containing the app and an **Applications**
+   shortcut. (Release images built on CI have no background art and the icons sit wherever
+   Finder puts them — the layout needs a desktop Mac to write. Installing works the same.)
 2. **Drag MonitorScreenSaver onto Applications.** Do it this way, in the Finder — don't run it
    from inside the disk image or from Downloads. *Start at login* records the bundle's absolute
    path, and an app outside `/Applications` is liable to App Translocation, where macOS runs it

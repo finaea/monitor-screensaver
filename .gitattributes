@@ -1,0 +1,9 @@
+# The macOS release job runs these on a runner, and a shell script checked out with CRLF
+# fails as `bad interpreter: /bin/bash^M`. Today that is only avoided because every
+# contributor happens to have core.autocrlf=true; pin it so it does not depend on that.
+*.sh text eol=lf
+
+# Same reasoning in reverse: these are only ever run by Windows shells.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf

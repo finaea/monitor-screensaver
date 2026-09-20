@@ -102,7 +102,15 @@ mount="/Volumes/$vol"
 # has no flag for window size, icon positions or the background picture. Hence driving the
 # GUI. The close/open around the settings is not superstition: on macOS 26 the background
 # picture does not take effect on the window that was open when it was set.
-osascript <<APPLESCRIPT >/dev/null
+#
+# This is also the one step that needs a logged-in GUI session with automation consent, so
+# it is the one step a CI runner may refuse. A refusal is not fatal: the app, the
+# /Applications symlink and the background art are all already in the image, and only the
+# .DS_Store that positions them is lost. An unstyled disk image still installs correctly,
+# so warn and carry on rather than failing a release over cosmetics. Set DMG_SKIP_LAYOUT=1
+# to skip the attempt entirely.
+apply_layout() {
+    osascript <<APPLESCRIPT
 tell application "Finder"
     tell disk "$vol"
         open
@@ -128,6 +136,19 @@ tell application "Finder"
     end tell
 end tell
 APPLESCRIPT
+}
+
+styled=yes
+if [ "${DMG_SKIP_LAYOUT:-0}" = "1" ]; then
+    styled=no
+    echo "note: DMG_SKIP_LAYOUT=1 — window layout skipped"
+elif ! apply_layout >/dev/null 2>&1; then
+    styled=no
+    echo "warning: Finder refused the window layout (no GUI session?)." >&2
+    echo "         The disk image is functional but unstyled: no background art and the" >&2
+    echo "         icons fall wherever Finder puts them. Build it on a desktop Mac for a" >&2
+    echo "         styled release image." >&2
+fi
 
 sync
 hdiutil detach "$device" -quiet
@@ -148,5 +169,5 @@ if [ "$identity" != "-" ]; then
 fi
 
 echo
-echo "Built: $dmg  ($(du -h "$dmg" | cut -f1))  [$arch]"
+echo "Built: $dmg  ($(du -h "$dmg" | cut -f1))  [$arch, styled=$styled]"
 echo "Check: open '$dmg'"
