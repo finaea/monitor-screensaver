@@ -74,6 +74,7 @@ public partial class App : System.Windows.Application
     private bool _sessionLocked;
     private PowerSnapshot _requesters = new(false, null, []);
     private DateTime _lastRequesterQuery = DateTime.MinValue;
+    private bool _requesterQueryRunning;
 
     internal AppSettings Settings => _settings;
     internal BlankingEngine Engine => _engine;
@@ -521,6 +522,15 @@ public partial class App : System.Windows.Application
             : TimeSpan.FromSeconds(5);
 
         if (!force && DateTime.UtcNow - _lastRequesterQuery < minInterval) return;
+
+        // One query in flight at a time. The Refresh button skips the interval check, and a
+        // powercfg run can outlast the interval anyway, so without this a second child
+        // process starts while the first is still going — and whichever finishes last wins,
+        // which can leave _requesters holding the older snapshot. That feeds the blacklist
+        // decision in the engine, not just the UI. Every caller is on the dispatcher thread
+        // (ConfigureAwait(true) resumes there), so a plain field is guard enough.
+        if (_requesterQueryRunning) return;
+        _requesterQueryRunning = true;
         _lastRequesterQuery = DateTime.UtcNow;
 
         try
@@ -531,6 +541,10 @@ public partial class App : System.Windows.Application
         catch
         {
             // transient; next tick retries
+        }
+        finally
+        {
+            _requesterQueryRunning = false;
         }
     }
 
