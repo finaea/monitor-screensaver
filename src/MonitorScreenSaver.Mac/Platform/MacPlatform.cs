@@ -182,7 +182,28 @@ public static class MacPowerAssertions
 /// </summary>
 public sealed class MacFullscreenDetector : IFullscreenDetector
 {
+    /// <summary>
+    /// The probe copies a dictionary for every on-screen window, and the engine asks four
+    /// times a second for the whole life of the tray app. Fullscreen does not come and go
+    /// at that rate, so the answer is reused for a second: the worst case is entering or
+    /// leaving fullscreen being noticed 1s late, against a 5-minute default idle timeout.
+    /// </summary>
+    private static readonly TimeSpan CacheFor = TimeSpan.FromSeconds(1);
+
+    private bool _cached;
+    private DateTime _cachedAt = DateTime.MinValue;
+
     public bool IsFullscreenActive()
+    {
+        var now = DateTime.UtcNow;
+        if (now - _cachedAt < CacheFor) return _cached;
+
+        _cached = Probe();
+        _cachedAt = now;
+        return _cached;
+    }
+
+    private static bool Probe()
     {
         try
         {
