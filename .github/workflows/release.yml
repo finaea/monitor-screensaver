@@ -10,8 +10,8 @@
 #   Trigger:  git push origin v1.2.2     (or run it by hand against an existing tag)
 #
 # Artifacts:
-#   MonitorScreenSaver.exe                  ~1.4 MB   needs the .NET 9 Desktop Runtime
-#   MonitorScreenSaver-selfcontained.exe    ~146 MB   runtime bundled
+#   MonitorScreenSaver.exe     ~1.4 MB   needs the .NET 9 Desktop Runtime
+#   MonitorScreenSaverSC.exe   ~146 MB   runtime bundled
 #   MonitorScreenSaver-<ver>-macos-arm64.dmg
 #   MonitorScreenSaver-<ver>-macos-x64.dmg
 #   SHA256SUMS.txt
@@ -123,7 +123,7 @@ jobs:
         shell: pwsh
         run: |
           $expected = '${{ needs.setup.outputs.version }}'
-          foreach ($name in 'MonitorScreenSaver.exe', 'MonitorScreenSaver-selfcontained.exe') {
+          foreach ($name in 'MonitorScreenSaver.exe', 'MonitorScreenSaverSC.exe') {
             $path = "publish/$name"
             if (-not (Test-Path $path)) { throw "$name was not produced." }
             $item = Get-Item $path
@@ -224,7 +224,7 @@ jobs:
         with:
           subject-path: |
             dist/MonitorScreenSaver.exe
-            dist/MonitorScreenSaver-selfcontained.exe
+            dist/MonitorScreenSaverSC.exe
             dist/*.dmg
 
       - name: Scan with VirusTotal
@@ -238,7 +238,7 @@ jobs:
           # public API allows 4 requests a minute - two uploads plus their overhead fits.
           files: |
             dist/MonitorScreenSaver.exe
-            dist/MonitorScreenSaver-selfcontained.exe
+            dist/MonitorScreenSaverSC.exe
           request_rate: 4
           # The release does not exist yet, so links are read off this step's output and
           # written into the notes below instead.
@@ -271,7 +271,7 @@ jobs:
             "| Download | Size | |"
             "|---|---|---|"
             "| ${tick}MonitorScreenSaver.exe${tick} | $(Size 'MonitorScreenSaver.exe') | **Start here.** Needs the .NET 9 Desktop Runtime |"
-            "| ${tick}MonitorScreenSaver-selfcontained.exe${tick} | $(Size 'MonitorScreenSaver-selfcontained.exe') | Runtime built in. For machines you cannot install software on |"
+            "| ${tick}MonitorScreenSaverSC.exe${tick} | $(Size 'MonitorScreenSaverSC.exe') | Runtime built in. For machines you cannot install software on |"
             ""
             "Both are the same app. The small one is 100x smaller because it uses the .NET"
             "runtime already on your PC instead of carrying its own copy."

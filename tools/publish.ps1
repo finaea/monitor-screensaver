@@ -1,7 +1,7 @@
 # Produces the two Windows release artifacts in .\publish:
 #
-#   MonitorScreenSaver.exe                1.4 MB   needs the .NET 9 Desktop Runtime
-#   MonitorScreenSaver-selfcontained.exe  146 MB   runtime bundled, nothing to install
+#   MonitorScreenSaver.exe     1.4 MB   needs the .NET 9 Desktop Runtime
+#   MonitorScreenSaverSC.exe   146 MB   runtime bundled, nothing to install
 #
 #   .\tools\publish.ps1                 both (what the release workflow runs)
 #   .\tools\publish.ps1 -Variant Fdd     just the small one, for a quick local build
@@ -76,7 +76,7 @@ if ($Variant -in 'Both', 'Fdd') {
     Publish-Variant -SelfContained $false -Destination "MonitorScreenSaver.exe"
 }
 if ($Variant -in 'Both', 'SelfContained') {
-    Publish-Variant -SelfContained $true -Destination "MonitorScreenSaver-selfcontained.exe"
+    Publish-Variant -SelfContained $true -Destination "MonitorScreenSaverSC.exe"
 }
 
 Write-Host ""

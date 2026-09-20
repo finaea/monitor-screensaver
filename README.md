@@ -40,7 +40,7 @@ Two downloads on [Releases](../../releases). Both are the same app, single file,
 | | Size | |
 |---|---|---|
 | **`MonitorScreenSaver.exe`** | 1.4 MB | **Start here.** Uses the .NET 9 runtime on your PC |
-| `MonitorScreenSaver-selfcontained.exe` | 146 MB | Carries its own runtime. For machines you can't install software on |
+| `MonitorScreenSaverSC.exe` | 146 MB | Carries its own runtime. For machines you can't install software on |
 
 The small one is a hundred times smaller because 99% of the big one is a private copy of
 the .NET runtime.
