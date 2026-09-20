@@ -50,10 +50,11 @@ public sealed class MacApp
 
         _settings = AppSettings.Load();
 
-        // Until the settings window lands (Phase 5) there is no UI to pick displays,
-        // so a fresh install manages everything. Persisted, so unticking later in the
-        // settings window sticks.
-        if (_settings.ManagedDisplayIds.Count == 0)
+        // A fresh install manages everything; the settings window narrows it down from
+        // there. Keyed on there having been no settings file at all, not on the list
+        // being empty — unticking every display is a legitimate saved state, and seeding
+        // off emptiness would silently re-enable the lot on the next launch.
+        if (!_settings.LoadedFromDisk && _settings.ManagedDisplayIds.Count == 0)
         {
             _settings.ManagedDisplayIds = new MacDisplayEnumerator().Enumerate().Select(d => d.StableId).ToList();
             _settings.Save();

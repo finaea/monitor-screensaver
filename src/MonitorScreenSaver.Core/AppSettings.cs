@@ -159,6 +159,15 @@ public sealed class AppSettings
     /// <summary>Stable ids of displays this app is allowed to blank.</summary>
     public List<string> ManagedDisplayIds { get; set; } = [];
 
+    /// <summary>
+    /// True when <see cref="Load"/> read an existing settings file; false when it fell back
+    /// to defaults. This is what "first run" means — an empty <see cref="ManagedDisplayIds"/>
+    /// cannot stand in for it, because unticking every display in the settings window is a
+    /// legitimate saved state that persists the same empty list.
+    /// </summary>
+    [JsonIgnore]
+    public bool LoadedFromDisk { get; private set; }
+
     // ---- Category 1: things Windows treats as user activity -------------------
 
     /// <summary>Keyboard and mouse via GetLastInputInfo. Always on; Windows always honours it.</summary>
@@ -255,7 +264,11 @@ public sealed class AppSettings
             {
                 var json = File.ReadAllText(FilePath);
                 var loaded = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions);
-                if (loaded is not null) return loaded.Sanitised();
+                if (loaded is not null)
+                {
+                    loaded.LoadedFromDisk = true;
+                    return loaded.Sanitised();
+                }
             }
         }
         catch
