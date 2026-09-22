@@ -10,7 +10,10 @@ Windows 10/11 · macOS 13+ · notification area / menu bar
 
 </div>
 
-MonitorScreenSaver covers selected displays after a period of inactivity while keeping the display connection active. This helps reduce OLED burn-in without the slower wake-up, display reconnection, or window movement that can happen when a monitor enters sleep.
+This app is built to allow OLED monitors to display black screen or screensaver video when the user is not actively using it without getting the monitor to sleep (by windows). This app allows idle monitors to display in **true black** by emitting nothing with 0 rgb values (black pixels). Windows' only support the feature to *power the display off* — and
+a powered-off monitor does not come back instantly. The reason for that is that on DisplayPort the link drops entirely,
+so Windows sees an unplug: it re-detects your displays, re-trains the link, and shuffles every
+window around while you sit there waiting ([Rapid Hot Plug Detect](https://devblogs.microsoft.com/directx/avoid-unexpected-app-rearrangement/)). This app intends to address few pain points and make few quality of life changes.
 
 <div align="center">
 <img src="config.png" alt="MonitorScreenSaver settings window" width="620">
@@ -22,7 +25,7 @@ MonitorScreenSaver covers selected displays after a period of inactivity while k
 - **Manages each display separately** — Every monitor can use its own mode, brightness, video, and scaling.
 - **Responds to activity** — Keyboard input, mouse movement, window changes, fullscreen apps, audio, and display-awake requests can control when blanking begins.
 - **Returns immediately** — Normal keyboard or mouse activity removes the overlay without waiting for the monitor to reconnect.
-- **Explains delays** — Settings and the tray or menu-bar menu can show which apps are asking the system to keep displays awake.
+- **List holding apps** — Settings and the tray or menu-bar menu can show which apps are asking the system to keep displays awake.
 - **Provides quick controls** — Displays can be blanked immediately, paused, or controlled with a configurable system-wide shortcut.
 
 ## Install
