@@ -252,41 +252,27 @@ jobs:
         shell: pwsh
         run: |
           $version = '${{ needs.setup.outputs.version }}'
-          $repo    = '${{ github.repository }}'
-          $commit  = '${{ github.sha }}'
-          $fence   = '```'
           $tick    = '`'
           $runtime = 'https://aka.ms/dotnet/9.0/windowsdesktop-runtime-win-x64.exe'
-
-          function Size($name) {
-            $f = Get-Item "dist/$name" -ErrorAction SilentlyContinue
-            if ($f) { "{0:N1} MB" -f ($f.Length / 1MB) } else { "?" }
-          }
 
           $lines = @(
             "MonitorScreenSaver $version."
             ""
-            "## Windows"
+            "## Install"
             ""
-            "| Download | Size | |"
-            "|---|---|---|"
-            "| ${tick}MonitorScreenSaver.exe${tick} | $(Size 'MonitorScreenSaver.exe') | **Start here.** Needs the .NET 9 Desktop Runtime |"
-            "| ${tick}MonitorScreenSaverSC.exe${tick} | $(Size 'MonitorScreenSaverSC.exe') | Runtime built in. For machines you cannot install software on |"
+            "### Windows"
             ""
-            "Both are the same app. The small one is 100x smaller because it uses the .NET"
-            "runtime already on your PC instead of carrying its own copy."
+            "Choose one download:"
+            "- ${tick}MonitorScreenSaver.exe${tick} - smaller download; requires the .NET 9 Desktop Runtime."
+            "- ${tick}MonitorScreenSaverSC.exe${tick} - larger download; includes the runtime."
             ""
-            "**Don't have the runtime?** Most PCs don't yet."
+            "1. Download and run the selected file."
+            "2. For ${tick}MonitorScreenSaver.exe${tick}, install [the .NET 9 Desktop Runtime]($runtime) if Windows asks for it."
+            "3. SmartScreen may appear because the app is not code signed. Select **More info -> Run anyway**. Windows 11 Smart App Control can block unsigned apps."
             ""
-            "[**Download the .NET 9 Desktop Runtime**]($runtime) - 58 MB, one click, about a minute."
+            "### macOS"
             ""
-            "Prefer a terminal? ${tick}winget install --id Microsoft.DotNet.DesktopRuntime.9 -e${tick}"
-            ""
-            "If you skip this and run ${tick}MonitorScreenSaver.exe${tick} anyway, Windows tells you the"
-            "runtime is missing - nothing breaks, you just come back here."
-            ""
-            "## macOS"
-            ""
+            "Choose the download that matches the Mac:"
           )
 
           $dmgs = Get-ChildItem dist -Filter *.dmg | Sort-Object Name
@@ -296,68 +282,11 @@ jobs:
           }
           $lines += @(
             ""
-            "Drag the app onto Applications in the Finder, then see the README for the"
-            "Gatekeeper step - these builds are ad-hoc signed, not notarized, so the first"
-            "launch is refused until you allow it in System Settings > Privacy & Security."
+            "1. Open the disk image and drag MonitorScreenSaver to Applications."
+            "2. Eject the disk image."
+            "3. If macOS blocks the first launch, open System Settings > Privacy & Security and select **Open Anyway**."
             ""
-            "Note: these disk images were built on a CI runner and have no background art."
-            "They install exactly the same way."
-            ""
-            "## Verifying these downloads"
-            ""
-            "Every file's SHA-256 is in ${tick}SHA256SUMS.txt${tick}:"
-            ""
-            ($fence + 'bash')
-            "sha256sum -c SHA256SUMS.txt"
-            $fence
-            ""
-            "**Build provenance** - proves these exact files were built by GitHub Actions"
-            "from this repository, rather than uploaded from somebody's desktop:"
-            ""
-            $fence
-            "gh attestation verify MonitorScreenSaver.exe -R $repo"
-            $fence
-            ""
-          )
-
-          $vt = '${{ steps.vt.outputs.analysis }}'
-          if ($vt) {
-            $lines += "**VirusTotal**"
-            $lines += ""
-            foreach ($pair in $vt -split ',') {
-              $name, $url = $pair -split '=', 2
-              # The action echoes back the path it was given, not a bare asset name.
-              $lines += "- [$tick$(Split-Path $name -Leaf)$tick]($url)"
-            }
-            $lines += ""
-            $lines += "A heuristic flag or two on the self-contained build is expected: it is a"
-            $lines += "146 MB unsigned binary that unpacks native libraries into ${tick}%TEMP%\.net${tick} at"
-            $lines += "startup, which reads as a dropper to a behavioural scanner. The small build"
-            $lines += "carries no runtime and is usually clean."
-          } else {
-            $lines += "**VirusTotal** - no analysis for this release."
-          }
-
-          $lines += @(
-            ""
-            "## About the SmartScreen warning"
-            ""
-            "These builds are **not code signed**, so Windows shows *""Windows protected your"
-            "PC""* on first run - click **More info** then **Run anyway**. On Windows 11 with"
-            "Smart App Control enabled it is blocked outright, and there is no way past that"
-            "short of a signing certificate."
-            ""
-            "Rather not take a binary on trust? Build it yourself - .NET 9 SDK, one command:"
-            ""
-            ($fence + 'powershell')
-            "git clone https://github.com/$repo"
-            "cd monitor-screensaver"
-            ".\tools\publish.ps1"
-            $fence
-            ""
-            "---"
-            ""
-            "Built from ${tick}${commit}${tick}"
+            "MonitorScreenSaver runs from the menu bar on macOS and the notification area on Windows."
           )
 
           ($lines -join "`n") | Set-Content 'RELEASE_NOTES.md' -Encoding utf8
