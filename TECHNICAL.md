@@ -97,6 +97,22 @@ id used for the managed-display list, so they survive replug and renumbering. Th
 `Mode`/`DimPercent` JSON properties are unchanged from earlier versions, so pre-existing
 settings files load as-is.
 
+### "First run" is not "the list is empty"
+
+A fresh install manages every display, and the settings window opens by itself so the
+choice is visible rather than implied. Both behaviours used to key off
+`ManagedDisplayIds.Count == 0`, which is wrong in the same way on both heads: unticking
+every display in the settings window is a legitimate saved state that persists that exact
+empty list. Someone who deliberately chose to manage nothing got every display re-enabled
+on the next launch (mac) and the settings window reopened in their face on every launch
+(Windows).
+
+`AppSettings.LoadedFromDisk` is the real question — `[JsonIgnore]`, set by `Load()` only
+when it actually read a file, false when it fell back to defaults. Both heads now gate on
+`!LoadedFromDisk && Count == 0`, so "no settings file yet" and "a settings file that says
+nothing" are finally different states. It lives in `Core` because both heads got the same
+condition wrong independently.
+
 ### Video mode details
 
 - `MediaElement` with `LoadedBehavior=Manual`: play starts on overlay show, `Stop()` on
@@ -123,6 +139,11 @@ settings files load as-is.
 - **Never blank during exclusive fullscreen** — `SHQueryUserNotificationState` returning
   `QUNS_RUNNING_D3D_FULL_SCREEN` / `QUNS_PRESENTATION_MODE`. Windows does *not* do this;
   it exists because an overlay over an exclusive-fullscreen swapchain is a functional hazard.
+  There is no equivalent single call on macOS: `MacFullscreenDetector` copies a dictionary
+  for every on-screen window and inspects the list, which the engine's 250 ms tick would
+  otherwise ask for four times a second for the whole life of the tray app. Fullscreen does
+  not come and go at that rate, so the answer is cached for one second — worst case is
+  entering or leaving fullscreen being noticed 1 s late, against a 5-minute default timeout.
 - **Never blank while audio is playing** — WASAPI endpoint peak meters
   (`IAudioMeterInformation` on every ACTIVE render endpoint, max instantaneous peak
   > 0.001 counts as audible). Same signal oled_aegis keys on. Endpoint meters read the
@@ -143,6 +164,16 @@ plus a one-click "Restart elevated" if you want the names.
 
 For unattended use, **Start elevated** registers a logon scheduled task with
 `RunLevel=HIGHEST`, so you get elevation from boot with no UAC prompt.
+
+**One query in flight at a time.** `powercfg /requests` is a child process, and the refresh
+is rate-limited rather than serialised — but the *Refresh* button skips the interval check,
+and a `powercfg` run can outlast the interval anyway. So a second process could start while
+the first was still going, and whichever finished last won, which is not necessarily the
+newer snapshot. That matters beyond a stale list in the UI: the same `PowerSnapshot` feeds
+`BlacklistCovers` in the engine, so an out-of-order result could decide whether to blank.
+A plain `bool` field is guard enough because every caller is on the dispatcher thread —
+the `await` resumes there — and it is cleared in a `finally`, or one thrown exception would
+wedge the refresh for the life of the process.
 
 ### Restarting elevated
 
@@ -266,8 +297,12 @@ The macOS head is the same engine with a different platform layer, not a rewrite
 solution, three projects: portable `Core` (the policy engine and settings, behind seam
 interfaces), the WPF `Windows` head, and a `Mac` head that talks to the OS through raw
 objc/CoreFoundation interop. The engine's decision — categories 1 and 2 — is written once.
-Full design, verification log and every trap found on the way live in
-[MACOS-PORT-PLAN.md](MACOS-PORT-PLAN.md).
+
+> The port was driven from a phased plan, `MACOS-PORT-PLAN.md`, which was retired once the
+> head shipped — a schedule stops being useful the moment it is finished, and its
+> verification log was a record of work rather than of the code. What it found that still
+> matters is in this document; the rest is in the history. A few source comments still
+> point at it by name.
 
 What each seam binds to:
 
@@ -286,12 +321,19 @@ What each seam binds to:
 | Start at login | `Run` key / logon task | `SMAppService` (launchd) |
 | Blank-now shortcut | `RegisterHotKey` | Carbon `RegisterEventHotKey` |
 
-Six things that cost real time, kept here so nobody re-derives them:
+Seven things that cost real time, kept here so nobody re-derives them:
 
 - **The status item is not this app's window.** On macOS 26 `NSStatusItem` is rendered and
   owned by ControlCenter; the button's own `NSWindow` never gets a window-server device, so
   `CGWindowList` on our own pid shows nothing and the item looks "missing" while working
   perfectly. Verify with `NSStatusItem.isVisible`, never through our window list.
+- **Nothing here is garbage collected, and `addItem:` takes its own retain.** Driving AppKit
+  through raw `objc_msgSend` means the reference counting is ours to get right, and
+  `MakeItem` is an alloc/init — so the caller owns a retain that has to go back once the
+  menu has taken one of its own. Without that release every rebuild of the holders submenu
+  leaked a row, which is a per-menu-open leak in a process that runs all day. What
+  `_dynamicItems` holds afterwards is a *borrowed* pointer, valid exactly as long as the
+  menu holds the item, which is until the next `removeItem:`.
 - **The cursor cannot be put below the overlay.** The header puts the cursor at
   `kCGMaximumWindowLevel − 1`, but a window one level above it still renders under the cursor:
   modern WindowServer composites the cursor above all windows. Six approaches were tested; the
@@ -463,9 +505,10 @@ layout the two agree.
 ## Build
 
 ```powershell
-dotnet build                 # dev build
-.\tools\publish.ps1          # single self-contained exe in .\publish
-.\tools\make-icon.ps1        # regenerate Assets\MonitorScreenSaver.ico + Assets\icon.png
+dotnet build                          # dev build
+.\tools\publish.ps1                   # both release exes in .\publish
+.\tools\publish.ps1 -Variant Fdd      # just the small one, for a quick local build
+.\tools\make-icon.ps1                 # regenerate Assets\MonitorScreenSaver.ico + Assets\icon.png
 ```
 
 Requires the .NET 9 SDK. The Windows head targets `net9.0-windows`, `win-x64`.
@@ -473,9 +516,31 @@ Requires the .NET 9 SDK. The Windows head targets `net9.0-windows`, `win-x64`.
 ```bash
 dotnet build MonitorScreenSaver.sln   # all three projects (works on macOS too)
 tools/bundle-macos.sh [osx-x64]       # ./publish/MonitorScreenSaver.app
+tools/make-dmg.sh                     # package whatever bundle is in ./publish as a .dmg
 tools/release-macos.sh                # both release dmgs — x64 then arm64, so the leftover .app is native
 tools/make-icns.sh                    # regenerate the .icns + menu bar art (needs Xcode CLT)
 ```
+
+### Why Windows ships two exes
+
+| Artifact | Size | Needs |
+|---|---|---|
+| `MonitorScreenSaver.exe` | ~1.4 MB | the .NET 9 Desktop Runtime installed |
+| `MonitorScreenSaverSC.exe` | ~146 MB | nothing — runtime bundled |
+
+The runtime is essentially all of the self-contained build: 151.8 MB of 153.3 MB before
+single-file packaging. It is also what makes the file look like malware to a behavioural
+scanner — a 146 MB unsigned binary that unpacks native libraries into `%TEMP%\.net` on
+first run is a shape reputation systems dislike, and an unsigned build starts from zero
+reputation on every release anyway. The small build has neither problem and is the
+recommended download; the self-contained one stays for locked-down machines where
+installing a runtime is not an option.
+
+Both publish a file called `MonitorScreenSaver.exe`, so `publish.ps1` builds each into its
+own staging directory and renames on the way out — otherwise the second silently overwrites
+the first. It also names the culprit when the destination is locked, because
+`Move-Item -Force` reports only "Cannot create a file when that file already exists", and
+the cause is almost always this app running out of `.\publish`.
 
 The mac head targets `net9.0`, `osx-arm64`/`osx-x64`, and its bundle is ad-hoc signed unless
 `SIGN_IDENTITY` names a Developer ID (which also switches on the hardened runtime and the
@@ -492,14 +557,32 @@ Two things the bundle script has to do that are easy to miss:
 - **Publish into a clean directory.** An incremental publish over an existing one keeps the
   executable and silently drops those loose dylibs.
 
-Two csproj settings that are load-bearing, both commented in place:
+`make-dmg.sh` ships the app with an `/Applications` symlink to drag it onto, which is not
+decoration: *Start at login* is `SMAppService` and it records an absolute path, and an app
+run straight out of `~/Downloads` is liable to App Translocation — executed from a
+randomised read-only mount, which per Apple DTS is only cleared "if the user moves the app
+using the Finder". A login item pointing into a translocated path breaks at the next reboot.
+
+Positioning those two icons is the one build step that needs a logged-in GUI session:
+`hdiutil` has no flag for window size, icon positions or the background picture, so the
+layout is written by driving Finder over AppleScript. That is also the one step a CI runner
+refuses. A refusal is not fatal and is not treated as one — the app, the symlink and the
+background art are all already in the image, and only the `.DS_Store` that positions them
+is lost, so the script warns, prints `styled=no` and carries on rather than failing a
+release over cosmetics. `DMG_SKIP_LAYOUT=1` skips the attempt outright. Build on a desktop
+Mac (`tools/release-macos.sh`) when a styled image matters for a given release.
+
+Two build settings that are load-bearing, both commented in place — the first in the
+csproj, the second in `publish.ps1`:
 
 - **Do not set `InvariantGlobalization=true`.** It saves ~10 MB but WPF's text stack needs
   the culture data: `MS.Internal.FontCache.MajorLanguages` fails its type initializer on the
   first `TextBlock` measure, which takes down any window containing text. The empty overlay
   windows survive, so it presents as "the settings window won't open".
 - **`EnableCompressionInSingleFile` is off.** It shrinks the exe by ~40% but the bundle is
-  decompressed into memory at startup, measured at +75 MB of private bytes.
+  decompressed into memory at startup, measured at +75 MB of private bytes. Disk is cheaper
+  than RAM for a tray app. Only ever applied to the self-contained variant — the
+  framework-dependent one has nothing of its own to compress.
 
 ### Icon generation
 
@@ -539,6 +622,77 @@ so a build never runs either script; regenerating needs Xcode Command Line Tools
 
 Changing an `.icns` in place does not always change what the Dock shows, since icon services
 cache by path. `killall Dock` settles it.
+
+---
+
+## Release
+
+`.github/workflows/release.yml` builds every artifact, publishes them, and attaches what a
+sceptical downloader needs to decide whether to trust them. Pushing a `v*` tag runs it;
+`workflow_dispatch` runs it against an existing tag.
+
+```
+git push origin v1.2.2
+```
+
+| Asset | What it is |
+|---|---|
+| `MonitorScreenSaver.exe` | framework-dependent, ~1.4 MB |
+| `MonitorScreenSaverSC.exe` | self-contained, ~146 MB |
+| `MonitorScreenSaver-<ver>-macos-arm64.dmg` | Apple silicon |
+| `MonitorScreenSaver-<ver>-macos-x64.dmg` | Intel |
+| `SHA256SUMS.txt` | one line per asset above, LF and no BOM |
+
+None of this removes the SmartScreen warning — that needs a signing certificate. What it
+buys is a way to prove the binaries came out of the public source rather than off a
+maintainer's desktop:
+
+- **A build-provenance attestation** (`actions/attest-build-provenance`), which binds each
+  artifact's digest to this repo, workflow and commit through Sigstore, so anyone can run
+  `gh attestation verify` on their download. It runs in the *release* job rather than in the
+  build jobs, even though that means downloading the artifacts again — that way the attested
+  bytes are provably the same bytes that get uploaded.
+- **A VirusTotal analysis link**, when the optional `VT_API_KEY` secret is set. Absent, the
+  scan is skipped and the release ships without links; nothing else changes. Windows
+  binaries only — the disk images face Gatekeeper, not Defender. `continue-on-error`,
+  because a VirusTotal outage should not block a release.
+
+### The version lives in four places and nothing reconciles them
+
+The tag, both csprojs and the Windows manifest each carry the version independently. That is
+exactly how the manifest sat at `1.0.0.0` while the csprojs had moved to 1.2.0, shipping two
+releases that misreported their own version to Windows. The mac csproj matters just as much,
+because `bundle-macos.sh` greps `<Version>` out of it to name the `.dmg`.
+
+So the first job fails the release unless all four agree, which is the only thing that makes
+them a single version rather than four hopeful copies of one. `assemblyIdentity` wants four
+parts where `<Version>` carries three, so the check pads before comparing. The Windows job
+then re-reads `ProductVersion` off the built exes, which catches a stale binary left in
+`publish/` by an earlier local run — `publish.ps1` does not clean its output directory.
+
+### Small traps worth keeping
+
+- **`SHA256SUMS.txt` has to be LF with no BOM.** Two spaces between hash and name is the
+  format `sha256sum -c` expects; `Set-Content` writes CRLF, and coreutils then reads the
+  trailing `\r` as part of the filename and reports "No such file". A BOM breaks the first
+  line the same way. `[IO.File]::WriteAllText` avoids both.
+- **`gh` needs `--repo` on every call.** The release job only downloads artifacts, it never
+  checks out the source, so there is no git remote to infer the repository from and every
+  call otherwise dies with "fatal: not a git repository". Naming it explicitly is cheaper
+  than checking out a repo whose contents the job does not need.
+- **The release step is idempotent** — `gh release view` first, then `edit`/`upload --clobber`
+  or `create` — so a re-run against the same tag updates instead of erroring.
+- **Release notes are built as an array of lines, and are pure ASCII.** A PowerShell
+  here-string nested in a YAML block scalar puts two sets of indentation rules in a fight
+  over the same whitespace; and the runner writes the block to a script file, where a
+  mangled em dash terminates a string and breaks the parse.
+- **Line endings are pinned in `.gitattributes`.** `*.sh text eol=lf`, because a shell
+  script checked out with CRLF fails on the runner as `bad interpreter: /bin/bash^M` —
+  which until then was avoided only because every contributor happened to have
+  `core.autocrlf=true`. `.ps1`/`.bat`/`.cmd` are pinned to CRLF for the same reason in
+  reverse.
+- **The CI disk images are unstyled**, for the Finder reason in the build section above.
+  They install correctly; they just lack the background poster.
 
 ---
 
@@ -656,10 +810,16 @@ shortcut; pass one to try a different combination, which also prints the pre-fli
 | Release, single-file **compressed** | ~331 MB | ~233 MB |
 | Release, single-file (shipped config) | **~241 MB** | ~204 MB |
 
-Measured with the settings window open, which is the worst case. An earlier revision recorded
-~198 MB, but that number is not comparable — it was taken while the settings window was
-silently failing to render (see `InvariantGlobalization` above), so nothing was actually
-being laid out. Workstation non-concurrent GC accounts for most of the saving over default.
+Measured with the settings window open, which is the worst case, and on the **self-contained**
+build — these numbers predate the framework-dependent variant and have not been re-measured
+against it. Expect them to be close rather than identical: the managed code and the WPF stack
+are the same either way, and what changes is where the runtime is mapped from, which mostly
+moves bytes between the private and shared columns below rather than adding them.
+
+An earlier revision recorded ~198 MB, but that number is not comparable — it was taken while
+the settings window was silently failing to render (see `InvariantGlobalization` above), so
+nothing was actually being laid out. Workstation non-concurrent GC accounts for most of the
+saving over default.
 
 ### Working set is the wrong number to quote
 
@@ -689,8 +849,11 @@ Both vendors are mapped on the test machine; it has displays across the integrat
 discrete GPUs. None of this is memory MonitorScreenSaver allocates, and none of it is avoidable while
 the UI is WPF.
 
-Single-file publish also extracts 8.0 MB of native libraries (5 files) to
-`%TEMP%\.net\MonitorScreenSaver\<hash>\` on first run. Disk, not memory.
+The self-contained build also extracts 8.0 MB of native libraries (5 files) to
+`%TEMP%\.net\MonitorScreenSaver\<hash>\` on first run. Disk, not memory — but it is also the
+behaviour that makes that variant look like a dropper to a scanner, which is half the reason
+the small build is the recommended download. The framework-dependent build has no native
+libraries of its own to extract and writes nothing there.
 
 The floor here is WPF + WinForms both being loaded; WinForms is present solely for the tray
 `NotifyIcon`. Replacing it with a raw `Shell_NotifyIcon` P/Invoke and a WPF `ContextMenu`
@@ -765,6 +928,10 @@ src/MonitorScreenSaver.Mac/             net9.0 — the AppKit head
 tools/make-icon.ps1           icon compositor (.ico + README png)
 tools/make-mac-icons.swift    mac artwork: Dock tile + menu bar glyph
 tools/make-icns.sh            wraps it with iconutil to write the .icns
-tools/publish.ps1             single-file Windows release build
-tools/bundle-macos.sh         the .app bundle
+tools/publish.ps1             both Windows release exes, small and self-contained
+tools/bundle-macos.sh         the .app bundle, one architecture per run
+tools/make-dmg.sh             wraps that bundle as a styled disk image
+tools/release-macos.sh        both dmgs in one go, x64 then arm64
+
+.github/workflows/release.yml the tagged release: build, hash, attest, scan, publish
 ```
