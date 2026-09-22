@@ -5,7 +5,7 @@ using MonitorScreenSaver.Mac.Interop;
 // Command line for the macOS head. "tray" is the real app; the rest are the diagnostics
 // that play the same role as the Windows head's --selftest/--watch, plus the per-service
 // harnesses the port was built against (they stay: each one isolates a single platform
-// service, which is how every macOS surprise in MACOS-PORT-PLAN.md was pinned down).
+// service, which is how the macOS surprises written up in TECHNICAL.md were pinned down).
 //
 //   tray               run the real app: menu bar item + engine + overlays (default)
 //   settings           the real app, with the settings window opened at launch

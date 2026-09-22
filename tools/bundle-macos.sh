@@ -16,7 +16,7 @@
 #   SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" tools/bundle-macos.sh
 #
 # then notarize and staple (both steps UNTESTED here — nobody has bought the $99
-# certificate yet, see MACOS-PORT-PLAN.md "Risks and open questions"):
+# certificate yet, so this is the documented sequence rather than a verified one):
 #
 #   ditto -c -k --keepParent publish/MonitorScreenSaver.app /tmp/MonitorScreenSaver.zip
 #   xcrun notarytool submit /tmp/MonitorScreenSaver.zip --keychain-profile NOTARY --wait

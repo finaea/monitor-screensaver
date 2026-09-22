@@ -301,8 +301,8 @@ objc/CoreFoundation interop. The engine's decision — categories 1 and 2 — is
 > The port was driven from a phased plan, `MACOS-PORT-PLAN.md`, which was retired once the
 > head shipped — a schedule stops being useful the moment it is finished, and its
 > verification log was a record of work rather than of the code. What it found that still
-> matters is in this document; the rest is in the history. A few source comments still
-> point at it by name.
+> matters is in this document; the rest is in the history. Source comments that used to
+> cite it by name now point here instead.
 
 What each seam binds to:
 

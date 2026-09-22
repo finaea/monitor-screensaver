@@ -209,8 +209,9 @@ public static class MacSelfTest
 
     /// <summary>
     /// macOS 26 renders status items inside ControlCenter, so the app's own window list
-    /// never shows one (this cost an hour during Phase 4 — see MACOS-PORT-PLAN.md). The
-    /// supported check is NSStatusItem.isVisible plus a live button object.
+    /// never shows one, and the item looks "missing" while working perfectly (see
+    /// TECHNICAL.md, "macOS"). The supported check is NSStatusItem.isVisible plus a live
+    /// button object.
     /// </summary>
     private static void StatusItem()
     {
