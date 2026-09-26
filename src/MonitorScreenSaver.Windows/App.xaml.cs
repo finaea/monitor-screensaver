@@ -147,6 +147,11 @@ public partial class App : System.Windows.Application
         if (_settings.StartWithWindows)
             AutoStart.MigrateLegacy(checkTask: _settings.StartElevated);
 
+        // Older builds registered the logon task with schtasks defaults, which kill it 72
+        // hours after logon. Rewrite such a task so an upgrade fixes it without a re-toggle.
+        if (_settings.StartWithWindows && _settings.StartElevated)
+            AutoStart.RepairTask();
+
         _events = new SystemEventSink();
         _events.Event += OnSystemEvent;
 
